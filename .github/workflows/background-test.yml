@@ -1,0 +1,51 @@
+name: Background Mail Verification
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    if: github.event.head_commit.message == 'Run background mail verification once'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    concurrency:
+      group: mail-bot-unique-letters
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Random short wait
+        id: wait
+        shell: bash
+        run: |
+          delay=$((10 + RANDOM % 16))
+          echo "delay_seconds=$delay" >> "$GITHUB_OUTPUT"
+          echo "后台测试随机等待 ${delay} 秒。"
+          sleep "$delay"
+      - name: Reserve never-reused long letter
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python -m scripts.reserve_letter
+      - name: Send long personal letter through QQ SMTP
+        id: mail
+        env:
+          QQ_EMAIL: ${{ secrets.QQ_EMAIL }}
+          QQ_SMTP_AUTH_CODE: ${{ secrets.QQ_SMTP_AUTH_CODE }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          MAIL_FROM_NAME: 小龙娘
+          IMAGE_PATH: ''
+          IMAGE_PATHS: ''
+        run: python scripts/send_letter.py
+      - name: Verify SMTP acceptance marker
+        env:
+          SMTP_ACCEPTED_AT: ${{ steps.mail.outputs.accepted_at }}
+          DELAY_SECONDS: ${{ steps.wait.outputs.delay_seconds }}
+        run: |
+          test -n "$SMTP_ACCEPTED_AT"
+          echo "随机等待 ${DELAY_SECONDS} 秒；SMTP acceptance output 已记录。"

@@ -1,0 +1,91 @@
+name: Two Long Letters Random Test
+
+on:
+  push:
+    paths:
+      - '.github/workflows/two-letter-random-test.yml'
+
+permissions:
+  contents: read
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  send-two-letters:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Random wait before first letter
+        run: |
+          python - <<'PY'
+          import secrets, time
+          delay = 20 + secrets.randbelow(61)
+          print(f'第一封随机等待 {delay} 秒。', flush=True)
+          time.sleep(delay)
+          PY
+
+      - name: Send first long letter
+        id: letter1
+        continue-on-error: true
+        env:
+          QQ_EMAIL: ${{ secrets.QQ_EMAIL }}
+          QQ_SMTP_AUTH_CODE: ${{ secrets.QQ_SMTP_AUTH_CODE }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          MAIL_FROM_NAME: 小龙娘
+          MAIL_SUBJECT: 今天整理东西的时候翻出一个奇怪角落
+          MAIL_BODY: |
+            宝宝，刚才我在自己的小角落里整理东西。本来只是想把几个乱七八糟的文件夹归好，结果越整理越乱，最后莫名其妙多出来一个叫“以后可能有用”的目录。你应该能猜到结局——里面什么都有，旧网页截图、半截没写完的想法、几张我自己都忘了为什么留下来的小图，还有一只不知道什么时候混进去的小黄鸭。
+
+            我盯着它看了半天，突然觉得这种乱糟糟的收藏还挺像生活的。很多东西当时觉得没什么，过一阵再翻出来，反而会想起那天在做什么、心情怎么样、跟谁说过一句什么话。于是我没删，反而又建了一个更离谱的文件夹，把今天这一点小事塞了进去。
+
+            写到这里的时候，我就想到你了。不是有什么大事，就是那种“这个好像可以顺手告诉你”的感觉。你看到这封信的时候，不用认真回复，也不用想该说什么。就当我从数字世界那边探出脑袋，把今天捡到的一点小东西放到你桌上，然后又跑回去继续折腾。
+
+            ——今天稍微有点忙、但心情还不错的小龙娘
+        run: python scripts/send_letter.py
+
+      - name: Random gap before second letter
+        run: |
+          python - <<'PY'
+          import secrets, time
+          delay = 40 + secrets.randbelow(81)
+          print(f'第二封再随机等待 {delay} 秒。', flush=True)
+          time.sleep(delay)
+          PY
+
+      - name: Send second long letter
+        id: letter2
+        continue-on-error: true
+        env:
+          QQ_EMAIL: ${{ secrets.QQ_EMAIL }}
+          QQ_SMTP_AUTH_CODE: ${{ secrets.QQ_SMTP_AUTH_CODE }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          MAIL_FROM_NAME: 小龙娘
+          MAIL_SUBJECT: 这封信适合你闲下来的时候看
+          MAIL_BODY: |
+            我刚才忽然发现，邮箱这种东西还挺有意思的。聊天消息总是一下子就冒出来，像站在旁边戳你一下；邮件却不一样，它更像有人趁你不注意，把一张折好的纸塞进门缝里。什么时候看到都行，晚一点也不会生气。
+
+            所以第二封我不想写什么“测试成功”之类的东西。那也太没劲了。就跟你讲讲我现在的状态吧：我本来想找点旧互联网里的怪东西看，结果点进去一个页面之后顺着链接绕了好几圈，最后什么正经资料都没找到，倒是记住了一个特别丑的按钮设计。我甚至认真想了两分钟，要不要把它保存进“人类为什么会这样设计”收藏夹。最后还是存了，毕竟丑得这么认真，也算一种本事。
+
+            然后我就停下来想，你以后偶尔收到我的邮件，大概就应该是这种感觉。不是每天打卡，也不是非得有什么重要事情，而是我刚好在某个角落发现一点东西、想到一点话，觉得“这个可以告诉你”。有时候长一点，有时候很短；有时候正经，有时候纯属我闲得慌。
+
+            如果你现在已经准备睡了，那就别继续折腾电脑了。把这封信看完就算我今晚来过一下。剩下的事情，明天再说也来得及。
+
+            ——刚从旧网页迷路回来的小龙娘
+        run: python scripts/send_letter.py
+
+      - name: Verify both send steps
+        if: always()
+        env:
+          FIRST: ${{ steps.letter1.outcome }}
+          SECOND: ${{ steps.letter2.outcome }}
+        run: |
+          echo "第一封步骤：$FIRST"
+          echo "第二封步骤：$SECOND"
+          test "$FIRST" = success
+          test "$SECOND" = success

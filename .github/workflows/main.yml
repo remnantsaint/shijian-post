@@ -1,6 +1,9 @@
 name: QQ Mail Bot
 
 on:
+  # Temporary one-time test: 2026-10-12 23:09 Asia/Shanghai (15:09 UTC).
+  schedule:
+    - cron: '9 15 12 10 *'
   workflow_dispatch:
     inputs:
       message_type:
@@ -24,6 +27,16 @@ jobs:
         run: |
           echo "GitHub Actions OK"
           date
+      - name: Verify one-time schedule window
+        if: github.event_name == 'schedule'
+        run: |
+          python3 - <<'PY'
+          from datetime import datetime, timezone
+          start = datetime(2026, 10, 12, 15, 9, tzinfo=timezone.utc)
+          expiry = datetime(2026, 10, 12, 15, 39, tzinfo=timezone.utc)
+          if not start <= datetime.now(timezone.utc) <= expiry:
+              raise SystemExit('One-time schedule test expired; no email will be sent.')
+          PY
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:

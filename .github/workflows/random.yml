@@ -1,0 +1,100 @@
+name: Random Mail Scheduler
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 计划操作
+        type: choice
+        options:
+          - 查看状态
+          - 安排一次
+          - 循环随机发送
+          - 关闭计划
+        default: 查看状态
+      min_interval:
+        description: 最短随机间隔（正整数）
+        type: number
+        default: 1
+      min_unit:
+        description: 最短间隔单位
+        type: choice
+        options:
+          - 分钟
+          - 小时
+          - 天
+        default: 分钟
+      max_interval:
+        description: 最长随机间隔（最大 90 天）
+        type: number
+        default: 90
+      max_unit:
+        description: 最长间隔单位
+        type: choice
+        options:
+          - 分钟
+          - 小时
+          - 天
+        default: 天
+  schedule:
+    # Only one cadence runs. Default: hourly; opt-in Variable below: every 5 min.
+    - cron: '*/5 * * * *'
+    - cron: '17 * * * *'
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: mail-bot-random-scheduler
+  cancel-in-progress: false
+
+jobs:
+  random-mail:
+    if: >-
+      github.event_name != 'schedule' ||
+      (github.event.schedule == '*/5 * * * *' && vars.MAIL_BOT_POLL_MINUTES == '5') ||
+      (github.event.schedule == '17 * * * *' && vars.MAIL_BOT_POLL_MINUTES != '5')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Explain polling cadence
+        env:
+          FAST_POLL: ${{ vars.MAIL_BOT_POLL_MINUTES == '5' }}
+        run: |
+          if [ "$FAST_POLL" = 'true' ]; then
+            echo '启用每 5 分钟检查；GitHub 调度可能延迟，不保证目标时间准点发送。'
+          else
+            echo '默认每小时检查；短间隔会等到下一次检查才发送。'
+            echo '需要更频繁检查时，在仓库 Actions Variables 中设置 MAIL_BOT_POLL_MINUTES=5。'
+          fi
+      - name: Prepare persisted random plan
+        id: prepare
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTION: ${{ inputs.action == '安排一次' && 'plan_once' || inputs.action == '循环随机发送' && 'plan_repeat' || inputs.action == '关闭计划' && 'disable' || 'status' }}
+          MIN_INTERVAL: ${{ inputs.min_interval }}
+          MIN_UNIT: ${{ inputs.min_unit == '分钟' && 'minutes' || inputs.min_unit == '小时' && 'hours' || 'days' }}
+          MAX_INTERVAL: ${{ inputs.max_interval }}
+          MAX_UNIT: ${{ inputs.max_unit == '分钟' && 'minutes' || inputs.max_unit == '小时' && 'hours' || 'days' }}
+        run: python -m scripts.random_scheduler prepare
+      - name: Send mail through QQ SMTP
+        id: mail
+        if: steps.prepare.outputs.send_due == 'true'
+        env:
+          QQ_EMAIL: ${{ secrets.QQ_EMAIL }}
+          QQ_SMTP_AUTH_CODE: ${{ secrets.QQ_SMTP_AUTH_CODE }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          MESSAGE_TYPE: random
+          IMAGE_PATH: ''
+        run: python scripts/send_mail.py
+      - name: Finalize persisted random plan
+        if: ${{ always() && steps.prepare.outputs.send_due == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MAIL_SEND_OUTCOME: ${{ steps.mail.outcome }}
+        run: python -m scripts.random_scheduler finalize

@@ -5,6 +5,8 @@ import random
 import smtplib
 import ssl
 import sys
+import html
+from datetime import datetime, timedelta, timezone
 from email import policy
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
@@ -112,6 +114,7 @@ def send():
         refused = client.send_message(message, from_addr=sender, to_addrs=[recipient])
         if refused:
             raise smtplib.SMTPRecipientsRefused(refused)
+        accepted_at = datetime.now(timezone.utc).isoformat()
     finally:
         if client is not None:
             # Once DATA was accepted, a QUIT failure must not suggest resending.
@@ -122,36 +125,79 @@ def send():
                     client.close()
                 except (OSError, smtplib.SMTPException):
                     pass
+    return {
+        "subject": str(message["Subject"]),
+        "body": message.get_body(preferencelist=("plain",)).get_content(),
+        "has_image": any(message.iter_attachments()),
+        "accepted_at": accepted_at,
+    }
+
+
+def failure_details(exc):
+    if isinstance(exc, ConfigurationError):
+        return "failed", f"配置错误：{exc}"
+    if isinstance(exc, smtplib.SMTPAuthenticationError):
+        return "failed", "SMTP 认证失败：请检查 QQ_EMAIL、SMTP 授权码及 QQ 邮箱 SMTP 服务开关。"
+    if isinstance(exc, smtplib.SMTPRecipientsRefused):
+        return "failed", "SMTP 拒绝收件地址：请检查 MAIL_TO 和邮箱接收限制。"
+    if isinstance(exc, smtplib.SMTPSenderRefused):
+        return "failed", "SMTP 拒绝发件地址：请检查 QQ_EMAIL 是否与授权码对应。"
+    if isinstance(exc, ssl.SSLError):
+        return "failed", "SMTP TLS 验证或握手失败：请检查证书和网络连接。"
+    if isinstance(exc, smtplib.SMTPDataError):
+        return "failed", "SMTP 拒绝邮件正文：请检查邮件内容或邮箱发送限制。"
+    if isinstance(exc, smtplib.SMTPServerDisconnected):
+        return "uncertain", "SMTP 连接中断，发送结果可能不确定；重试前请先检查收件箱。"
+    if isinstance(exc, smtplib.SMTPException):
+        return "uncertain", "SMTP 服务器拒绝发送或连接中断；若已接收邮件正文，请先检查收件箱再重试。"
+    if isinstance(exc, (TimeoutError, OSError)):
+        return "uncertain", "SMTP 网络错误或超时：请检查 smtp.qq.com:465；若发生在提交正文时，重试前请先检查收件箱。"
+    # Never use raw exception strings: servers may echo credentials/addresses.
+    return "uncertain", "发送发生未预期错误；为保护凭据，未输出底层异常内容。"
+
+
+def append_send_summary(status, result=None, explanation=""):
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+    labels = {"accepted": "SMTP 已接受", "failed": "发送失败或未发送", "uncertain": "发送结果不确定，需核验"}
+    kind = os.environ.get("MESSAGE_TYPE", "test")
+    kind = {"test": "测试邮件", "random": "随机小消息"}.get(kind, "配置无效")
+    recorded_at = datetime.fromisoformat(result["accepted_at"]) if result else datetime.now(timezone.utc)
+    recorded_at = recorded_at.astimezone(timezone(timedelta(hours=8)))
+    summary = (
+        "## 邮件发送记录\n\n"
+        "| 项目 | 状态 |\n|---|---|\n"
+        f"| 发送结果 | {labels[status]} |\n"
+        f"| 记录时间（北京时间） | {recorded_at:%Y-%m-%d %H:%M:%S} |\n"
+        f"| 邮件类型 | {kind} |\n"
+    )
+    if result:
+        summary += f"| 图片附件 | {'有' if result['has_image'] else '无'} |\n\n"
+        summary += f"### {html.escape(result['subject'])}\n\n<pre>{html.escape(result['body'])}</pre>\n\n"
+        summary += "SMTP 接受不等于最终投递或已读，请以收件邮箱为准。\n"
+    else:
+        summary += f"\n{html.escape(explanation)}\n"
+    summary += "\n本记录不包含邮箱地址或授权码。\n"
+    try:
+        with open(summary_path, "a", encoding="utf-8") as output:
+            output.write(summary)
+    except OSError:
+        print("发送摘要保存失败，请查看发送步骤日志；请勿仅因此重复发送。", file=sys.stderr)
 
 
 def main():
     try:
-        send()
-    except ConfigurationError as exc:
-        print(f"配置错误：{exc}", file=sys.stderr)
-    except smtplib.SMTPAuthenticationError:
-        print("SMTP 认证失败：请检查 QQ_EMAIL、SMTP 授权码及 QQ 邮箱 SMTP 服务开关。", file=sys.stderr)
-    except smtplib.SMTPRecipientsRefused:
-        print("SMTP 拒绝收件地址：请检查 MAIL_TO 和邮箱接收限制。", file=sys.stderr)
-    except smtplib.SMTPSenderRefused:
-        print("SMTP 拒绝发件地址：请检查 QQ_EMAIL 是否与授权码对应。", file=sys.stderr)
-    except ssl.SSLError:
-        print("SMTP TLS 验证或握手失败：请检查证书和网络连接。", file=sys.stderr)
-    except smtplib.SMTPDataError:
-        print("SMTP 拒绝邮件正文：请检查邮件内容或邮箱发送限制。", file=sys.stderr)
-    except smtplib.SMTPServerDisconnected:
-        print("SMTP 连接中断，发送结果可能不确定；重试前请先检查收件箱。", file=sys.stderr)
-    except smtplib.SMTPException:
-        print("SMTP 服务器拒绝发送或连接中断；若已接收邮件正文，请先检查收件箱再重试。", file=sys.stderr)
-    except (TimeoutError, OSError):
-        print("SMTP 网络错误或超时：请检查 smtp.qq.com:465；若发生在提交正文时，重试前请先检查收件箱。", file=sys.stderr)
-    except Exception:
-        # Never log raw exception strings: servers may echo credentials/addresses.
-        print("发送发生未预期错误；为保护凭据，未输出底层异常内容。", file=sys.stderr)
+        result = send()
+    except Exception as exc:
+        status, explanation = failure_details(exc)
+        print(explanation, file=sys.stderr)
+        append_send_summary(status, explanation=explanation)
+        return 1
     else:
         print("QQ SMTP 已接受邮件，请检查收件箱或垃圾邮件文件夹。")
+        append_send_summary("accepted", result)
         return 0
-    return 1
 
 
 if __name__ == "__main__":

@@ -1,0 +1,43 @@
+name: 邮件状态与历史
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/main.yml
+      - .github/workflows/random.yml
+      - .github/workflows/status.yml
+      - scripts/status_history.py
+  workflow_run:
+    workflows: [QQ Mail Bot, Random Mail Scheduler]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: mail-bot-status
+  cancel-in-progress: true
+
+jobs:
+  status:
+    # Ordinary schedule checks do not need another runner just to refresh a page.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.name != 'Random Mail Scheduler' ||
+      github.event.workflow_run.event != 'schedule' ||
+      github.event.workflow_run.conclusion != 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Build status and history page
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHECK_INTERVAL: ${{ vars.MAIL_BOT_POLL_MINUTES || '60' }}
+        run: python -m scripts.status_history

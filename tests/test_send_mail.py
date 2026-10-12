@@ -3,10 +3,12 @@ import io
 import os
 import smtplib
 import ssl
+import tempfile
 import unittest
 from email import policy
 from email.parser import BytesParser
 from unittest.mock import patch
+from pathlib import Path
 
 from scripts import send_mail
 
@@ -116,6 +118,50 @@ class MailTests(unittest.TestCase):
                 result, output = self.run_main()
                 self.assertEqual(result, 1)
                 self.assertIn(expected, output)
+
+    @patch("scripts.send_mail.smtplib.SMTP_SSL")
+    def test_success_summary_records_message_without_mailbox_or_credentials(self, smtp):
+        smtp.return_value.send_message.return_value = {}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "summary.md"
+            with patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": str(path)}):
+                self.assertEqual(self.run_main()[0], 0)
+            report = path.read_text()
+            self.assertIn("SMTP 已接受", report)
+            self.assertIn("中文 UTF-8 编码正常", report)
+            self.assertIn("北京时间", report)
+            for sensitive in ("private-test-authorization", "sender@qq.com", "recipient@example.com"):
+                self.assertNotIn(sensitive, report)
+
+    @patch("scripts.send_mail.smtplib.SMTP_SSL")
+    def test_failure_summary_redacts_server_error(self, smtp):
+        smtp.return_value.login.side_effect = smtplib.SMTPAuthenticationError(535, b"private-test-authorization")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "summary.md"
+            with patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": str(path)}):
+                self.assertEqual(self.run_main()[0], 1)
+            report = path.read_text()
+            self.assertIn("认证失败", report)
+            self.assertNotIn("private-test-authorization", report)
+
+    @patch("scripts.send_mail.smtplib.SMTP_SSL")
+    def test_summary_write_failure_does_not_turn_accepted_mail_into_failure(self, smtp):
+        smtp.return_value.send_message.return_value = {}
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": directory}):
+            result, output = self.run_main()
+        self.assertEqual(result, 0)
+        self.assertIn("摘要保存失败", output)
+
+    @patch("scripts.send_mail.smtplib.SMTP_SSL")
+    def test_disconnection_summary_marks_uncertainty(self, smtp):
+        smtp.return_value.send_message.side_effect = smtplib.SMTPServerDisconnected("private-test-authorization")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "summary.md"
+            with patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": str(path)}):
+                self.assertEqual(self.run_main()[0], 1)
+            report = path.read_text()
+            self.assertIn("结果不确定", report)
+            self.assertNotIn("private-test-authorization", report)
 
 
 if __name__ == "__main__":

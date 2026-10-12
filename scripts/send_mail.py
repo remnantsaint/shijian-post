@@ -76,7 +76,10 @@ def send():
             try:
                 client.quit()
             except (OSError, smtplib.SMTPException):
-                client.close()
+                try:
+                    client.close()
+                except (OSError, smtplib.SMTPException):
+                    pass
 
 
 def main():
@@ -92,10 +95,14 @@ def main():
         print("SMTP 拒绝发件地址：请检查 QQ_EMAIL 是否与授权码对应。", file=sys.stderr)
     except ssl.SSLError:
         print("SMTP TLS 验证或握手失败：请检查证书和网络连接。", file=sys.stderr)
+    except smtplib.SMTPDataError:
+        print("SMTP 拒绝邮件正文：请检查邮件内容或邮箱发送限制。", file=sys.stderr)
+    except smtplib.SMTPServerDisconnected:
+        print("SMTP 连接中断，发送结果可能不确定；重试前请先检查收件箱。", file=sys.stderr)
     except smtplib.SMTPException:
         print("SMTP 服务器拒绝发送或连接中断；若已接收邮件正文，请先检查收件箱再重试。", file=sys.stderr)
     except (TimeoutError, OSError):
-        print("SMTP 网络连接失败或超时：请检查 smtp.qq.com:465 的连接。", file=sys.stderr)
+        print("SMTP 网络错误或超时：请检查 smtp.qq.com:465；若发生在提交正文时，重试前请先检查收件箱。", file=sys.stderr)
     except Exception:
         # Never log raw exception strings: servers may echo credentials/addresses.
         print("发送发生未预期错误；为保护凭据，未输出底层异常内容。", file=sys.stderr)

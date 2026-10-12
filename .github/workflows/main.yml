@@ -10,14 +10,21 @@ on:
           - test
           - random
         default: test
+      send_delay:
+        description: 发送时机
+        type: choice
+        options:
+          - 立即发送
+          - 3 分钟内随机发送
+        default: 立即发送
 
 permissions:
   contents: read
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
 
     steps:
       - name: Test
@@ -30,6 +37,10 @@ jobs:
           python-version: '3.12'
       - name: Run offline tests
         run: python -m unittest discover -s tests -v
+      - name: Wait before sending
+        env:
+          SEND_DELAY: ${{ inputs.send_delay || '立即发送' }}
+        run: python scripts/wait_before_send.py
       - name: Send mail through QQ SMTP
         env:
           QQ_EMAIL: ${{ secrets.QQ_EMAIL }}

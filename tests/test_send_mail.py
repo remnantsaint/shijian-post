@@ -58,7 +58,7 @@ class MailTests(unittest.TestCase):
         cases = [
             (smtplib.SMTPAuthenticationError(535, b"private-test-authorization"), "认证失败"),
             (smtplib.SMTPRecipientsRefused({"recipient@example.com": (550, b"private-test-authorization")}), "拒绝收件"),
-            (smtplib.SMTPDataError(554, b"private-test-authorization"), "服务器拒绝"),
+            (smtplib.SMTPDataError(554, b"private-test-authorization"), "拒绝邮件正文"),
             (TimeoutError("private-test-authorization"), "超时"),
             (ssl.SSLError("private-test-authorization"), "TLS"),
         ]
@@ -85,6 +85,37 @@ class MailTests(unittest.TestCase):
         smtp.return_value.quit.side_effect = smtplib.SMTPServerDisconnected("closed")
         self.assertEqual(self.run_main()[0], 0)
         smtp.return_value.close.assert_called_once()
+
+    @patch("scripts.send_mail.smtplib.SMTP_SSL")
+    def test_all_cleanup_failures_after_acceptance_are_success(self, smtp):
+        smtp.return_value.send_message.return_value = {}
+        smtp.return_value.quit.side_effect = smtplib.SMTPServerDisconnected("closed")
+        smtp.return_value.close.side_effect = OSError("private-test-authorization")
+        self.assertEqual(self.run_main()[0], 0)
+
+    @patch("scripts.send_mail.smtplib.SMTP_SSL")
+    def test_cleanup_failure_preserves_authentication_error(self, smtp):
+        smtp.return_value.login.side_effect = smtplib.SMTPAuthenticationError(535, b"private-test-authorization")
+        smtp.return_value.quit.side_effect = smtplib.SMTPServerDisconnected("closed")
+        smtp.return_value.close.side_effect = OSError("private-test-authorization")
+        result, output = self.run_main()
+        self.assertEqual(result, 1)
+        self.assertIn("认证失败", output)
+        smtp.return_value.send_message.assert_not_called()
+
+    @patch("scripts.send_mail.smtplib.SMTP_SSL")
+    def test_send_stage_errors_are_distinct_and_do_not_leak(self, smtp):
+        cases = [
+            (smtplib.SMTPDataError(554, b"private-test-authorization"), "拒绝邮件正文"),
+            (smtplib.SMTPServerDisconnected("private-test-authorization"), "发送结果可能不确定"),
+            (TimeoutError("private-test-authorization"), "重试前请先检查收件箱"),
+        ]
+        for error, expected in cases:
+            with self.subTest(error=type(error).__name__):
+                smtp.return_value.send_message.side_effect = error
+                result, output = self.run_main()
+                self.assertEqual(result, 1)
+                self.assertIn(expected, output)
 
 
 if __name__ == "__main__":

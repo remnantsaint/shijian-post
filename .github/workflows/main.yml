@@ -26,6 +26,9 @@ on:
 permissions:
   contents: read
 
+env:
+  TZ: Asia/Shanghai
+
 jobs:
   test:
     runs-on: ubuntu-24.04
@@ -35,7 +38,7 @@ jobs:
       - name: Test
         run: |
           echo "GitHub Actions OK"
-          date
+          date '+北京时间 %Y-%m-%d %H:%M:%S %z'
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-python@v7.0.0
         with:

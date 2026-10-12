@@ -9,6 +9,8 @@ from email import policy
 from email.parser import BytesParser
 from unittest.mock import patch
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 
 from scripts import send_mail
 
@@ -162,6 +164,41 @@ class MailTests(unittest.TestCase):
             report = path.read_text()
             self.assertIn("结果不确定", report)
             self.assertNotIn("private-test-authorization", report)
+
+    @patch("scripts.send_mail.smtplib.SMTP_SSL")
+    def test_date_is_refreshed_after_login_and_acceptance_time_is_actual(self, smtp):
+        smtp.return_value.send_message.return_value = {}
+        construction = datetime(2026, 12, 31, 15, 59, 59, tzinfo=timezone.utc)
+        submission = construction + timedelta(seconds=1)
+        acceptance = submission + timedelta(seconds=1, microseconds=123456)
+        with patch("scripts.send_mail.utc_now", side_effect=[construction, submission, acceptance]):
+            result = send_mail.send()
+        message = smtp.return_value.send_message.call_args.args[0]
+        date = parsedate_to_datetime(str(message['Date']))
+        self.assertEqual(date, submission)
+        self.assertEqual(date.utcoffset(), timedelta(hours=8))
+        self.assertEqual(date.strftime('%Y-%m-%d %H:%M:%S'), '2027-01-01 00:00:00')
+        self.assertEqual(send_mail.parse_utc(result['accepted_at']), acceptance)
+
+    @patch("scripts.send_mail.smtplib.SMTP_SSL")
+    def test_smtp_time_output_preserves_success_and_does_not_expose_credentials(self, smtp):
+        smtp.return_value.send_message.return_value = {}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'output'
+            with patch.dict(os.environ, {'GITHUB_OUTPUT': str(path)}):
+                self.assertEqual(self.run_main()[0], 0)
+            output = path.read_text()
+            self.assertTrue(output.startswith('accepted_at='))
+            self.assertIsNotNone(send_mail.parse_utc(output.strip().split('=', 1)[1]))
+            self.assertNotIn('private-test-authorization', output)
+
+    @patch("scripts.send_mail.smtplib.SMTP_SSL")
+    def test_time_output_failure_does_not_change_mail_acceptance(self, smtp):
+        smtp.return_value.send_message.return_value = {}
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'GITHUB_OUTPUT': directory}):
+            result, output = self.run_main()
+        self.assertEqual(result, 0)
+        self.assertIn('发送时间输出保存失败', output)
 
 
 if __name__ == "__main__":

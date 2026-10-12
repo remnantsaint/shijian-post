@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  TZ: Asia/Shanghai
+
 jobs:
   checks:
     runs-on: ubuntu-24.04

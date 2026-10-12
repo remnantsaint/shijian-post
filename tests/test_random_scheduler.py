@@ -179,6 +179,7 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(state["last_send"], {
             "run_id": "42", "run_attempt": 1,
             "occurred_at": format_time(NOW), "status": "accepted",
+            "time_source": "state_recorded",
         })
         self.assertEqual(state["history"], [state["last_send"]])
 
@@ -280,8 +281,29 @@ class SchedulerTests(unittest.TestCase):
         scheduler.finalize("success")
         self.assertEqual(len(api.state["history"]), 100)
         self.assertEqual(api.state["history"][0]["run_id"], "1")
-        self.assertTrue(all(set(item) == {"run_id", "run_attempt", "occurred_at", "status"}
+        required = {"run_id", "run_attempt", "occurred_at", "status"}
+        self.assertTrue(all(set(item) in (required, required | {"time_source"})
                             for item in api.state["history"]))
+
+    def test_saved_accepted_time_is_the_smtp_time_not_finalize_time(self):
+        api = MockAPI(state_at())
+        scheduler = self.scheduler(api)
+        scheduler.prepare("poll")
+        actual_acceptance = NOW - timedelta(seconds=12, microseconds=345678)
+        state = scheduler.finalize("success", format_time(actual_acceptance))
+        self.assertEqual(parse_time(state["last_send"]["occurred_at"]), actual_acceptance)
+        self.assertEqual(state["last_send"]["time_source"], "smtp_accepted")
+
+    def test_next_time_preserves_fractional_second_interval(self):
+        api = MockAPI()
+        now = NOW.replace(microsecond=999999)
+        scheduler = Scheduler(api, '42', now=lambda: now, choose_delay=lambda lower, upper: 1)
+        target = parse_time(scheduler.next_time(1, 1))
+        self.assertEqual(target - now, timedelta(minutes=1))
+
+    def test_format_time_rejects_missing_timezone(self):
+        with self.assertRaises(SchedulerError):
+            format_time(NOW.replace(tzinfo=None))
 
     def test_disabled_plan_never_sends(self):
         state = state_at()

@@ -6,7 +6,7 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -148,6 +148,109 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(status.record_time(jobs, fallback), status.timestamp("2026-10-12T04:20:00Z"))
         jobs[0]["completed_at"] = None
         self.assertEqual(status.record_time(jobs, fallback), fallback)
+
+    def test_time_sources_describe_the_actual_available_timestamp(self):
+        fallback = status.timestamp("2026-10-12T04:59:00Z")
+        jobs = [{"completed_at": "2026-10-12T04:20:00Z", "steps": [
+            {"name": status.SEND_STEP, "completed_at": "2026-10-12T04:10:00Z"}]}]
+        self.assertEqual(status.record_details(jobs, fallback)[1], "发送步骤结束")
+        jobs[0]["steps"][0]["completed_at"] = None
+        self.assertEqual(status.record_details(jobs, fallback)[1], "任务结束")
+        jobs[0]["completed_at"] = None
+        self.assertEqual(status.record_details(jobs, fallback), (fallback, "运行更新时间"))
+        self.assertEqual(status.record_details(jobs), (None, "未知"))
+
+    def test_old_attempt_without_its_own_completion_time_stays_unknown(self):
+        for jobs in (None, [], [{"steps": [{"name": status.SEND_STEP,
+                                             "completed_at": "invalid"}],
+                              "completed_at": None}]):
+            with self.subTest(jobs=jobs):
+                api = FakeAPI([run(30, attempt=2)])
+                api.jobs(30, [{"name": status.SEND_STEP, "conclusion": "success",
+                               "completed_at": "2026-10-12T04:30:00Z"}], attempt=2)
+                if jobs is not None:
+                    api.responses[f"{BASE}/actions/runs/30/attempts/1/jobs?per_page=100"] = {
+                        "jobs": jobs}
+                _, entries = status.read_main_runs(api, REPO)
+                previous = next(entry for entry in entries if entry["run_attempt"] == 1)
+                self.assertIsNone(previous["date"])
+                self.assertEqual(previous["time_source"], "未知")
+                report = status.make_report(api, REPO, now=NOW)
+                previous_row = next(line for line in report.splitlines()
+                                    if line.startswith("|") and "第 1 次" in line)
+                self.assertIn("| 时间未知 | 未知 |", previous_row)
+                self.assertNotIn("2026-10-12", previous_row)
+
+    def test_beijing_time_crosses_days_and_years(self):
+        for value, expected in [
+                ("2026-10-12T16:00:00Z", "2026-10-13 00:00:00"),
+                ("2026-12-31T16:00:00Z", "2027-01-01 00:00:00"),
+                ("2027-01-01T00:00:00+08:00", "2027-01-01 00:00:00")]:
+            with self.subTest(value=value):
+                self.assertEqual(status.beijing(status.timestamp(value)), expected)
+
+    def test_naive_dates_are_rejected_without_assuming_runner_timezone(self):
+        with self.assertRaises(status.ReportError):
+            status.timestamp("2026-10-12T05:00:00")
+        naive = datetime(2026, 10, 12, 5)
+        with self.assertRaises(status.ReportError):
+            status.beijing(naive)
+        api = FakeAPI()
+        with self.assertRaises(status.ReportError):
+            status.make_report(api, REPO, now=naive)
+        self.assertEqual(api.calls, [])
+
+    def test_query_completion_uses_clock_after_api_reads(self):
+        api = FakeAPI()
+        started = NOW
+        completed = NOW + timedelta(seconds=42)
+
+        def clock():
+            if not api.calls:
+                return started
+            return completed
+
+        with patch.object(status, "utc_now", side_effect=clock) as mocked_clock:
+            report = status.make_report(api, REPO)
+        self.assertEqual(mocked_clock.call_count, 2)
+        self.assertIn("查询开始：北京时间 2026-10-12 13:00:00", report)
+        self.assertIn("查询完成：北京时间 2026-10-12 13:00:42", report)
+        with patch.object(status, "utc_now") as mocked_clock:
+            fixed_report = status.make_report(FakeAPI(), REPO, now=NOW)
+        mocked_clock.assert_not_called()
+        self.assertIn("查询完成：北京时间 2026-10-12 13:00:00", fixed_report)
+
+    def test_past_target_reports_real_lateness_but_future_target_does_not(self):
+        api = FakeAPI()
+        due = plan()
+        due["next_send_at"] = "2026-10-12T04:52:30Z"
+        api.random_state(due)
+        report = status.make_report(api, REPO, now=NOW)
+        self.assertIn("已晚 7 分 30 秒", report)
+        due["next_send_at"] = "2026-10-12T05:00:01Z"
+        api.random_state(due)
+        report = status.make_report(api, REPO, now=NOW)
+        self.assertNotIn("已晚", report)
+        self.assertNotIn("计划时间已到", report)
+
+    def test_random_history_distinguishes_acceptance_from_state_recording(self):
+        history = [
+            {"run_id": str(40 + index), "run_attempt": 1,
+             "occurred_at": "2026-10-12T04:30:00Z", "status": "accepted", **extra}
+            for index, extra in enumerate(({}, {"time_source": "state_recorded"},
+                                           {"time_source": "smtp_accepted"}))]
+        api = FakeAPI()
+        api.random_state(plan(history))
+        _, _, entries = status.read_random_state(api, REPO)
+        self.assertEqual([entry["time_source"] for entry in entries],
+                         ["状态记录（旧记录）", "状态记录", "SMTP 接受"])
+        report = status.make_report(api, REPO, now=NOW)
+        self.assertIn("| 时间来源 |", report)
+        self.assertIn("不代表实际收件时间", report)
+        history[-1]["status"] = "uncertain"
+        api.random_state(plan(history))
+        with self.assertRaises(status.ReportError):
+            status.read_random_state(api, REPO)
 
     def test_running_wait_and_send_are_distinct(self):
         current = run(13, state="in_progress", conclusion=None)

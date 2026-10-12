@@ -6,11 +6,15 @@ import smtplib
 import ssl
 import sys
 import html
-from datetime import datetime, timedelta, timezone
 from email import policy
 from email.message import EmailMessage
-from email.utils import formatdate, make_msgid
+from email.utils import format_datetime, make_msgid
 from pathlib import Path
+
+if __package__:
+    from .time_utils import BEIJING, format_beijing, format_utc, parse_utc, utc_now
+else:
+    from time_utils import BEIJING, format_beijing, format_utc, parse_utc, utc_now
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
@@ -46,7 +50,7 @@ def build_message(sender, recipient, kind):
     message = EmailMessage(policy=policy.SMTP)
     message["From"] = sender
     message["To"] = recipient
-    message["Date"] = formatdate(localtime=False)
+    message["Date"] = format_datetime(utc_now().astimezone(BEIJING))
     message["Message-ID"] = make_msgid(domain="qq.com")
     if kind == "test":
         message["Subject"] = "邮件机器人测试：你好！"
@@ -111,10 +115,12 @@ def send():
         client = smtplib.SMTP_SSL("smtp.qq.com", 465, timeout=30,
                                   context=ssl.create_default_context())
         client.login(sender, password)
+        # Connection/login may take time; the header reflects actual submission.
+        message.replace_header("Date", format_datetime(utc_now().astimezone(BEIJING)))
         refused = client.send_message(message, from_addr=sender, to_addrs=[recipient])
         if refused:
             raise smtplib.SMTPRecipientsRefused(refused)
-        accepted_at = datetime.now(timezone.utc).isoformat()
+        accepted_at = format_utc(utc_now())
     finally:
         if client is not None:
             # Once DATA was accepted, a QUIT failure must not suggest resending.
@@ -163,13 +169,13 @@ def append_send_summary(status, result=None, explanation=""):
     labels = {"accepted": "SMTP 已接受", "failed": "发送失败或未发送", "uncertain": "发送结果不确定，需核验"}
     kind = os.environ.get("MESSAGE_TYPE", "test")
     kind = {"test": "测试邮件", "random": "随机小消息"}.get(kind, "配置无效")
-    recorded_at = datetime.fromisoformat(result["accepted_at"]) if result else datetime.now(timezone.utc)
-    recorded_at = recorded_at.astimezone(timezone(timedelta(hours=8)))
+    recorded_at = parse_utc(result["accepted_at"]) if result else utc_now()
+    time_label = "SMTP 接受时间" if result else "失败检查时间"
     summary = (
         "## 邮件发送记录\n\n"
         "| 项目 | 状态 |\n|---|---|\n"
         f"| 发送结果 | {labels[status]} |\n"
-        f"| 记录时间（北京时间） | {recorded_at:%Y-%m-%d %H:%M:%S} |\n"
+        f"| {time_label}（北京时间 UTC+8） | {format_beijing(recorded_at)} |\n"
         f"| 邮件类型 | {kind} |\n"
     )
     if result:
@@ -186,6 +192,17 @@ def append_send_summary(status, result=None, explanation=""):
         print("发送摘要保存失败，请查看发送步骤日志；请勿仅因此重复发送。", file=sys.stderr)
 
 
+def write_accepted_output(accepted_at):
+    path = os.environ.get("GITHUB_OUTPUT")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as output:
+            output.write(f"accepted_at={accepted_at}\n")
+    except OSError:
+        print("SMTP 已接受，但发送时间输出保存失败；请勿因此重复发送。", file=sys.stderr)
+
+
 def main():
     try:
         result = send()
@@ -195,7 +212,8 @@ def main():
         append_send_summary(status, explanation=explanation)
         return 1
     else:
-        print("QQ SMTP 已接受邮件，请检查收件箱或垃圾邮件文件夹。")
+        print(f"QQ SMTP 已接受邮件，北京时间 {format_beijing(parse_utc(result['accepted_at']))}；请检查收件箱或垃圾邮件文件夹。")
+        write_accepted_output(result["accepted_at"])
         append_send_summary("accepted", result)
         return 0
 

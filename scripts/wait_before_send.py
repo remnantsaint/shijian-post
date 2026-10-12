@@ -4,7 +4,12 @@ import os
 import random
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
+
+if __package__:
+    from .time_utils import format_beijing, utc_now
+else:
+    from time_utils import format_beijing, utc_now
 
 
 def choose_delay(mode):
@@ -22,9 +27,10 @@ def main():
         print(f"配置错误：{exc}", file=sys.stderr)
         return 1
     if seconds:
-        target = datetime.now(timezone(timedelta(hours=8))) + timedelta(seconds=seconds)
-        print(f"等待 {seconds} 秒，预计北京时间 {target:%Y-%m-%d %H:%M:%S} 开始发送。", flush=True)
+        target = utc_now() + timedelta(seconds=seconds)
+        print(f"等待 {seconds} 秒，计划北京时间 {format_beijing(target)} 开始发送。", flush=True)
         time.sleep(seconds)
+        print(f"等待实际结束：北京时间 {format_beijing(utc_now())}。", flush=True)
     else:
         print("立即发送。", flush=True)
     return 0

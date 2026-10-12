@@ -17,6 +17,9 @@ permissions:
   contents: read
   actions: read
 
+env:
+  TZ: Asia/Shanghai
+
 concurrency:
   group: mail-bot-status
   cancel-in-progress: true

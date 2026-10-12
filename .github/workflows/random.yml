@@ -45,6 +45,9 @@ permissions:
   contents: write
   actions: write
 
+env:
+  TZ: Asia/Shanghai
+
 concurrency:
   group: mail-bot-random-scheduler
   cancel-in-progress: false
@@ -97,4 +100,5 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MAIL_SEND_OUTCOME: ${{ steps.mail.outcome }}
+          SMTP_ACCEPTED_AT: ${{ steps.mail.outputs.accepted_at }}
         run: python -m scripts.random_scheduler finalize

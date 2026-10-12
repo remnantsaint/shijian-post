@@ -7,10 +7,11 @@ import json
 import os
 import random
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from urllib.parse import quote
 
 from scripts.github_api import GitHubAPI, GitHubAPIError
+from scripts.time_utils import format_beijing, format_utc, parse_utc, utc_now
 
 
 STATE_BRANCH = "mail-bot-state"
@@ -25,22 +26,21 @@ class SchedulerError(ValueError):
 
 
 def format_time(value):
-    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        return format_utc(value)
+    except (ValueError, OverflowError):
+        raise SchedulerError("时间必须包含时区；未发送邮件。") from None
 
 
 def parse_time(value):
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            raise ValueError
-        return parsed.astimezone(timezone.utc)
-    except (AttributeError, TypeError, ValueError):
+        return parse_utc(value)
+    except (TypeError, ValueError):
         raise SchedulerError("计划中的 UTC 时间无效；未发送邮件。") from None
 
 
 def display_time(value):
-    local = parse_time(value).astimezone(timezone(timedelta(hours=8)))
-    return local.strftime("%Y-%m-%d %H:%M:%S（北京时间）")
+    return format_beijing(parse_time(value)) + "（北京时间 UTC+8）"
 
 
 def positive_integer(value):
@@ -101,13 +101,18 @@ def validate_state(state):
         raise SchedulerError("计划的历史记录格式无效；未发送邮件。")
     entries = history + ([state["last_send"]] if state.get("last_send") is not None else [])
     for item in entries:
+        required_fields = {"run_id", "run_attempt", "occurred_at", "status"}
         if (not isinstance(item, dict)
-                or set(item) != {"run_id", "run_attempt", "occurred_at", "status"}
+                or set(item) not in (required_fields, required_fields | {"time_source"})
                 or not isinstance(item["run_id"], str) or not item["run_id"].isdigit()
                 or type(item["run_attempt"]) is not int or item["run_attempt"] < 1
                 or item["status"] not in ("accepted", "uncertain")):
             raise SchedulerError("计划的发送历史格式无效；未发送邮件。")
         parse_time(item["occurred_at"])
+        if item.get("time_source", "state_recorded") not in ("smtp_accepted", "state_recorded"):
+            raise SchedulerError("计划的历史时间来源无效；未发送邮件。")
+        if item.get("time_source") == "smtp_accepted" and item["status"] != "accepted":
+            raise SchedulerError("计划的历史时间与发送结果不一致；未发送邮件。")
     return state
 
 
@@ -182,7 +187,7 @@ class Scheduler:
         if not self.run_id.isdigit():
             raise SchedulerError("缺少有效的 GitHub Actions 运行编号。")
         self.run_attempt = positive_integer(run_attempt)
-        self.now = now or (lambda: datetime.now(timezone.utc))
+        self.now = now or utc_now
         self.choose_delay = choose_delay or random.SystemRandom().randint
         self.output = output or (lambda due: None)
 
@@ -193,10 +198,12 @@ class Scheduler:
     def next_time(self, lower, upper):
         return format_time(self.now() + timedelta(minutes=self.choose_delay(lower, upper)))
 
-    def record(self, state, status):
+    def record(self, state, status, accepted_at=None):
+        occurred_at = parse_time(accepted_at) if accepted_at else self.now()
         item = {"run_id": state["claim_run_id"],
                 "run_attempt": state.get("claim_run_attempt", 1),
-                "occurred_at": format_time(self.now()), "status": status}
+                "occurred_at": format_time(occurred_at), "status": status,
+                "time_source": "smtp_accepted" if accepted_at else "state_recorded"}
         state["last_send"] = item
         state["history"] = (state.get("history", []) + [item])[-HISTORY_LIMIT:]
 
@@ -266,14 +273,14 @@ class Scheduler:
         self.output(True)
         return state
 
-    def finalize(self, mail_outcome):
+    def finalize(self, mail_outcome, accepted_at=None):
         state = self.store.load()
         if (state is None or state["state"] != "sending"
                 or state.get("claim_run_id") != self.run_id
                 or state.get("claim_run_attempt", 1) != self.run_attempt):
             raise SchedulerError("本次运行未持有发送记录，不能更新结果；未重复发送。")
         success = mail_outcome == "success"
-        self.record(state, "accepted" if success else "uncertain")
+        self.record(state, "accepted" if success else "uncertain", accepted_at if success else None)
         state["claim_run_id"] = None
         state["claim_run_attempt"] = None
         if success and state["mode"] == "repeat":
@@ -314,7 +321,7 @@ def main(argv=None):
                               run_attempt=os.environ.get("GITHUB_RUN_ATTEMPT", "1"),
                               output=write_output)
         if args.command == "finalize":
-            scheduler.finalize(os.environ.get("MAIL_SEND_OUTCOME", "unknown"))
+            scheduler.finalize(os.environ.get("MAIL_SEND_OUTCOME", "unknown"), os.environ.get("SMTP_ACCEPTED_AT") or None)
         else:
             action = "poll" if os.environ.get("GITHUB_EVENT_NAME") == "schedule" else os.environ.get("ACTION", "status")
             lower, upper = requested_bounds(os.environ) if action.startswith("plan_") else (1, MAX_MINUTES)

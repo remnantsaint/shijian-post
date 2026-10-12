@@ -1,14 +1,39 @@
-name: Test Mail Bot
+name: QQ Mail Bot
 
 on:
   workflow_dispatch:
+    inputs:
+      message_type:
+        description: 邮件类型
+        type: choice
+        options:
+          - test
+          - random
+        default: test
+
+permissions:
+  contents: read
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     steps:
       - name: Test
         run: |
           echo "GitHub Actions OK"
           date
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run offline tests
+        run: python -m unittest discover -s tests -v
+      - name: Send mail through QQ SMTP
+        env:
+          QQ_EMAIL: ${{ secrets.QQ_EMAIL }}
+          QQ_SMTP_AUTH_CODE: ${{ secrets.QQ_SMTP_AUTH_CODE }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          MESSAGE_TYPE: ${{ inputs.message_type || 'random' }}
+        run: python scripts/send_mail.py

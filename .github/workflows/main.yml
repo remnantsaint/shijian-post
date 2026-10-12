@@ -17,6 +17,11 @@ on:
           - 立即发送
           - 3 分钟内随机发送
         default: 立即发送
+      image_path:
+        description: 图片路径（可选，例如 images/photo.jpg）
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -47,4 +52,5 @@ jobs:
           QQ_SMTP_AUTH_CODE: ${{ secrets.QQ_SMTP_AUTH_CODE }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
           MESSAGE_TYPE: ${{ inputs.message_type || 'random' }}
+          IMAGE_PATH: ${{ inputs.image_path }}
         run: python scripts/send_mail.py

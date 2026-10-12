@@ -8,6 +8,11 @@ import sys
 from email import policy
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
+from pathlib import Path
+
+
+REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
 
 class ConfigurationError(ValueError):
@@ -57,11 +62,48 @@ def build_message(sender, recipient, kind):
     return message
 
 
+def add_image_attachment(message, image_path, repository_root=None):
+    if not image_path:
+        return
+    relative = Path(image_path)
+    if (relative.is_absolute() or not relative.parts or relative.parts[0] != "images"
+            or ".." in relative.parts or any(c in image_path for c in "\r\n\0")):
+        raise ConfigurationError("IMAGE_PATH 必须是 images/ 下的相对图片路径，不能包含越界或换行")
+    root = Path(repository_root or REPOSITORY_ROOT).resolve()
+    try:
+        path = (root / relative).resolve(strict=True)
+        path.relative_to(root / "images")
+        if not path.is_file():
+            raise ConfigurationError("IMAGE_PATH 必须指向普通图片文件")
+        if path.stat().st_size > MAX_IMAGE_BYTES:
+            raise ConfigurationError("图片附件不能超过 5 MiB")
+        with path.open("rb") as image_file:
+            data = image_file.read(MAX_IMAGE_BYTES + 1)
+    except ConfigurationError:
+        raise
+    except (OSError, ValueError, RuntimeError):
+        raise ConfigurationError("IMAGE_PATH 图片不存在、无法读取或超出 images/ 目录") from None
+    if len(data) > MAX_IMAGE_BYTES:
+        raise ConfigurationError("图片附件不能超过 5 MiB")
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        subtype = "png"
+    elif data.startswith(b"\xff\xd8\xff"):
+        subtype = "jpeg"
+    elif data.startswith((b"GIF87a", b"GIF89a")):
+        subtype = "gif"
+    elif data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        subtype = "webp"
+    else:
+        raise ConfigurationError("图片附件仅支持 PNG、JPEG、GIF 或 WebP，不能仅修改文件扩展名")
+    message.add_attachment(data, maintype="image", subtype=subtype, filename=relative.name)
+
+
 def send():
     sender = address("QQ_EMAIL")
     password = required("QQ_SMTP_AUTH_CODE")
     recipient = address("MAIL_TO")
     message = build_message(sender, recipient, os.environ.get("MESSAGE_TYPE", "test"))
+    add_image_attachment(message, os.environ.get("IMAGE_PATH", "").strip())
     client = None
     try:
         client = smtplib.SMTP_SSL("smtp.qq.com", 465, timeout=30,

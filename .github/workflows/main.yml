@@ -24,7 +24,7 @@ on:
         default: ''
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   TZ: Asia/Shanghai
@@ -49,6 +49,11 @@ jobs:
         env:
           SEND_DELAY: ${{ inputs.send_delay || '立即发送' }}
         run: python scripts/wait_before_send.py
+      - name: Reserve never-reused random letter
+        if: inputs.message_type == 'random'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python -m scripts.reserve_letter
       - name: Send mail through QQ SMTP
         env:
           QQ_EMAIL: ${{ secrets.QQ_EMAIL }}

@@ -50,8 +50,15 @@ def send():
     sender = address("QQ_EMAIL")
     password = required("QQ_SMTP_AUTH_CODE")
     recipient = address("MAIL_TO")
-    subject = text_env("MAIL_SUBJECT", 120)
-    body = text_env("MAIL_BODY", MAX_BODY_CHARS)
+    if os.environ.get("MAIL_BODY", "").strip():
+        subject = text_env("MAIL_SUBJECT", 120)
+        body = text_env("MAIL_BODY", MAX_BODY_CHARS)
+    else:
+        if __package__:
+            from .dragon_letters import make_letter
+        else:
+            from dragon_letters import make_letter
+        subject, body = make_letter()
     from_name = os.environ.get("MAIL_FROM_NAME", "小龙娘").strip() or "小龙娘"
 
     message = EmailMessage(policy=policy.SMTP)

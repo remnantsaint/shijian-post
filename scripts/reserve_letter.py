@@ -5,12 +5,12 @@ import os
 import random
 import sys
 from scripts.github_api import GitHubAPI, GitHubAPIError
-from scripts.dragon_letters import OPENINGS, SCENES, THOUGHTS, CLOSINGS
+from scripts.dragon_letters import OPENINGS, SCENES, THOUGHTS, EXTRAS, CLOSINGS, TITLES
 
 BRANCH = "mail-bot-state"
 PATH = ".mail-bot/used-letters.json"
 TOTAL = len(OPENINGS) * len(SCENES) * len(THOUGHTS) * len(CLOSINGS)
-TITLES = ["小龙娘的随机来信", "今天也有一封意外的小信", "藏在收件箱里的小故事", "小龙娘的云端明信片", "来自小龙娘的碎碎念"]
+
 
 def letter(number):
     d = number
@@ -18,7 +18,12 @@ def letter(number):
     thought = THOUGHTS[d % len(THOUGHTS)]; d //= len(THOUGHTS)
     scene = SCENES[d % len(SCENES)]; d //= len(SCENES)
     opening = OPENINGS[d]
-    return TITLES[number % len(TITLES)], "\n\n".join((opening, scene, thought, closing))
+    rng = random.Random(number ^ 0x5A17)
+    extra_count = rng.randint(2, 5)
+    extras = rng.sample(EXTRAS, k=min(extra_count, len(EXTRAS)))
+    subject = TITLES[number % len(TITLES)]
+    return subject, "\n\n".join((opening, scene, *extras, thought, closing))
+
 
 def main():
     api = GitHubAPI(os.environ["GITHUB_REPOSITORY"], os.environ["GH_TOKEN"])
@@ -51,6 +56,7 @@ def main():
     with open(env_path, "a", encoding="utf-8") as f:
         f.write(f"MAIL_SUBJECT={subject}\nMAIL_BODY<<{marker}\n{body}\n{marker}\n")
     print(f"已预留信件编号 {number}；发送失败或结果不明时也不会再次使用。")
+
 
 if __name__ == "__main__":
     try:

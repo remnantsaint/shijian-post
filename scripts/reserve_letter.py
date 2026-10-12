@@ -18,7 +18,7 @@ def letter(number):
     thought = THOUGHTS[d % len(THOUGHTS)]; d //= len(THOUGHTS)
     scene = SCENES[d % len(SCENES)]; d //= len(SCENES)
     opening = OPENINGS[d]
-    return TITLES[number % len(TITLES)], "\\n\\n".join((opening, scene, thought, closing))
+    return TITLES[number % len(TITLES)], "\n\n".join((opening, scene, thought, closing))
 
 def main():
     api = GitHubAPI(os.environ["GITHUB_REPOSITORY"], os.environ["GH_TOKEN"])
@@ -41,7 +41,7 @@ def main():
     number = random.SystemRandom().choice(available)
     used.append(number)
     payload = {"message": f"Reserve dragon letter {number} before sending", "branch": BRANCH,
-               "content": base64.b64encode((json.dumps({"version": 1, "used": used}) + "\\n").encode()).decode()}
+               "content": base64.b64encode((json.dumps({"version": 1, "used": used}) + "\n").encode()).decode()}
     if sha:
         payload["sha"] = sha
     api.request("PUT", endpoint, payload)
@@ -49,7 +49,7 @@ def main():
     env_path = os.environ["GITHUB_ENV"]
     marker = "DRAGON_LETTER_END_" + str(number)
     with open(env_path, "a", encoding="utf-8") as f:
-        f.write(f"MAIL_SUBJECT={subject}\\nMAIL_BODY<<{marker}\\n{body}\\n{marker}\\n")
+        f.write(f"MAIL_SUBJECT={subject}\nMAIL_BODY<<{marker}\n{body}\n{marker}\n")
     print(f"已预留信件编号 {number}；发送失败或结果不明时也不会再次使用。")
 
 if __name__ == "__main__":

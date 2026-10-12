@@ -303,6 +303,13 @@ class StatusTests(unittest.TestCase):
             status.make_report(api, REPO, now=NOW)
         self.assertNotIn("private-mail", str(error.exception))
 
+    def test_unknown_poll_frequency_is_not_reported_as_default(self):
+        api = FakeAPI()
+        api.random_state(plan())
+        report = status.make_report(api, REPO, now=NOW, check_interval=None)
+        self.assertIn("检查间隔未确认", report)
+        self.assertNotIn("检查间隔约 60", report)
+
     def test_markdown_escapes_html_links_and_table_separators(self):
         result = status.markdown("<script>[click](https://evil.invalid)|`secret`\nvalue")
         self.assertNotIn("<script>", result)

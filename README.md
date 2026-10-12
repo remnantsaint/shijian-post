@@ -78,6 +78,34 @@ GitHub 可能延迟或跳过调度，两种模式都不能保证准点，SMTP �
 公开仓库长期无活动可能被 GitHub 自动停用定时工作流，跨数月的计划需定期查看状态。
 不需要创建新的个人 Token；工作流使用 GitHub 自带的令牌，并仅将邮箱 Secrets 传给发送步骤。
 
+## GPT/助手控制入口
+
+提供 `python -m scripts.control_bot` 作为统一控制入口，供具有终端工具和 GitHub 授权的助手使用。
+在本仓库根目录运行，默认查询状态，不发送邮件。复用执行环境已有的 `GH_TOKEN` 或 `GITHUB_TOKEN` 绑定，
+不需要把 QQ 邮箱授权码交给 GPT；QQ 凭据继续仅由 Actions 发送步骤读取。
+
+| 需求 | 命令示例 |
+| --- | --- |
+| 查询当前状态和历史 | `python -m scripts.control_bot status` |
+| 发送一条随机小消息 | `python -m scripts.control_bot send --type random` |
+| 随机等待最多 3 分钟再发送 | `python -m scripts.control_bot send --type random --delay random_3min` |
+| 发送已上传的图片 | `python -m scripts.control_bot send --image images/photo.jpg` |
+| 自定义单次随机计划 | `python -m scripts.control_bot plan --mode once --min 5 --min-unit minutes --max 30 --max-unit days` |
+| 自定义循环随机计划 | 同上，将 `--mode once` 改为 `--mode repeat` |
+| 关闭自动随机计划 | `python -m scripts.control_bot pause` |
+| 取消正在执行的邮件任务 | `python -m scripts.control_bot cancel-run --run-id 运行编号` |
+
+“控制服务器”在这里指触发、停止邮件工作流以及管理计划；GitHub 临时运行器的系统由平台管理。
+取消任务不会撤回已经被 SMTP 接受的邮件。命令提交成功后仍要检查 Actions 结果，不能直接当成投递成功。
+当前轮询频率及时间范围规则与上文相同；状态查询不会改动已有计划。
+若工作流已停用但旧计划仍标记启用，创建新计划会要求先关闭旧计划，防止意外恢复旧目标时间。
+关闭操作先停用随机工作流，再保存关闭状态并保留历史；状态发生并发更新时不会强行覆盖或自动重试。
+已开始的发送仍可能完成；发送中的旧记录会标为结果不确定，需核对对应运行和收件箱。
+
+GPT/ChatGPT 定时任务需要自己的执行工具和 GitHub 授权。当前控制入口不创建 GPT 定时任务，
+也不会向 GPT 任务复制当前会话的凭据；是否能在无人值守的 GPT 任务中调用，需由该任务环境实际提供并验证。
+在工具不可用时，GitHub 自身的持久随机计划可独立执行，开启后不依赖此聊天持续在线。
+
 ## 当前状态与历史
 
 进入 **Actions → 邮件状态与历史 → Run workflow**，完成后打开这次运行的 **Summary**。

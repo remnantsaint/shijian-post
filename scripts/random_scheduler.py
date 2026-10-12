@@ -3,6 +3,7 @@
 import argparse
 import base64
 import binascii
+import copy
 import json
 import os
 import random
@@ -114,6 +115,24 @@ def validate_state(state):
         if item.get("time_source") == "smtp_accepted" and item["status"] != "accepted":
             raise SchedulerError("计划的历史时间与发送结果不一致；未发送邮件。")
     return state
+
+
+def closed_plan_state(state, *, now=None):
+    """Return a closed copy without inventing a run or discarding history."""
+    validate_state(state)
+    closed = copy.deepcopy(state)
+    if closed["state"] == "sending":
+        item = {
+            "run_id": closed["claim_run_id"],
+            "run_attempt": closed.get("claim_run_attempt", 1),
+            "occurred_at": format_time(utc_now() if now is None else now),
+            "status": "uncertain", "time_source": "state_recorded",
+        }
+        closed["last_send"] = item
+        closed["history"] = (closed.get("history", []) + [item])[-HISTORY_LIMIT:]
+    closed.update(enabled=False, state="disabled", next_send_at=None,
+                  claim_run_id=None, claim_run_attempt=None)
+    return validate_state(closed)
 
 
 class StateStore:
@@ -239,10 +258,7 @@ class Scheduler:
             return state
         if action == "disable":
             if state is not None:
-                if state["state"] == "sending":
-                    self.record(state, "uncertain")
-                state.update(enabled=False, state="disabled", next_send_at=None,
-                             claim_run_id=None, claim_run_attempt=None)
+                state = closed_plan_state(state, now=self.now())
                 self.store.save(state, "Disable random mail plan")
             self.output(False)
             self.disable_workflow()

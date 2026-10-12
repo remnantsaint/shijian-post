@@ -242,7 +242,10 @@ def random_description(repo, workflow, state, now, interval):
             minutes, seconds = divmod(late_seconds, 60)
             lines.append(f"计划时间已到，已晚 {minutes} 分 {seconds} 秒；"
                          "正在等待下次检查，GitHub 调度可能延迟。")
-    lines.append(f"检查间隔约 {interval} 分钟；GitHub 调度和排队额外计算，不保证准点。")
+    if interval is None:
+        lines.append("检查间隔未确认（无法读取仓库变量）；请查看 Actions 状态报告。GitHub 调度和排队可能延迟，不保证准点。")
+    else:
+        lines.append(f"检查间隔约 {interval} 分钟；GitHub 调度和排队额外计算，不保证准点。")
     if state.get("claim_run_id") is not None:
         lines.append(f"[查看关联的运行]({run_url(repo, state['claim_run_id'], state.get('claim_run_attempt'))})")
     return lines
@@ -271,6 +274,7 @@ def make_report(api, repo, now=None, check_interval="60"):
     else:
         lines.append("主工作流尚无运行记录。")
     lines.extend(random_description(repo, random_workflow, state, query_completed,
+                                    None if check_interval is None else
                                     5 if check_interval == "5" else 60))
     unique = {}
     for entry in manual + random_history:

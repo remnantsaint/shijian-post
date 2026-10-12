@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from scripts.github_api import GitHubAPIError
 from scripts.random_scheduler import (
     MAX_MINUTES, STATE_BRANCH, STATE_PATH, Scheduler, SchedulerError,
-    format_time, interval_minutes, parse_time, requested_bounds,
+    closed_plan_state, format_time, interval_minutes, parse_time, requested_bounds,
     validate_bounds,
 )
 
@@ -108,6 +108,47 @@ class BoundsTests(unittest.TestCase):
             parse_time("2026-10-12T10:00:00")
 
 
+class ClosePlanTests(unittest.TestCase):
+    def test_closure_is_pure_and_preserves_existing_history(self):
+        state = state_at()
+        accepted = {"run_id": "10", "run_attempt": 2,
+                    "occurred_at": format_time(NOW), "status": "accepted"}
+        state.update(last_send=accepted, history=[accepted])
+        original = copy.deepcopy(state)
+        closed = closed_plan_state(state, now=NOW)
+        self.assertEqual(state, original)
+        self.assertFalse(closed["enabled"])
+        self.assertEqual(closed["state"], "disabled")
+        self.assertIsNone(closed["next_send_at"])
+        self.assertEqual(closed["history"], original["history"])
+        self.assertEqual(closed["last_send"], original["last_send"])
+        closed["history"][0]["status"] = "uncertain"
+        self.assertEqual(state, original)
+
+    def test_sending_closure_uses_existing_claim_and_actual_recording_time(self):
+        state = state_at()
+        state.update(state="sending", claim_run_id="963", claim_run_attempt=3)
+        state["history"] = [
+            {"run_id": str(number), "run_attempt": 1,
+             "occurred_at": format_time(NOW), "status": "accepted"}
+            for number in range(100)
+        ]
+        original = copy.deepcopy(state)
+        actual = NOW + timedelta(seconds=7, microseconds=123456)
+        closed = closed_plan_state(state, now=actual)
+        self.assertEqual(state, original)
+        self.assertEqual(closed["last_send"], {
+            "run_id": "963", "run_attempt": 3,
+            "occurred_at": format_time(actual), "status": "uncertain",
+            "time_source": "state_recorded",
+        })
+        self.assertEqual(len(closed["history"]), 100)
+        self.assertEqual(closed["history"][0]["run_id"], "1")
+        self.assertEqual(closed["history"][-1], closed["last_send"])
+        self.assertIsNone(closed["claim_run_id"])
+        self.assertIsNone(closed["claim_run_attempt"])
+
+
 class SchedulerTests(unittest.TestCase):
     def setUp(self):
         self.quiet = contextlib.redirect_stdout(io.StringIO())
@@ -145,6 +186,18 @@ class SchedulerTests(unittest.TestCase):
         api = MockAPI()
         self.assertIsNone(self.scheduler(api).prepare("poll"))
         self.assertEqual(api.events, ["send_due:false", "disable"])
+
+    def test_explicit_close_reuses_existing_claim_history_without_retry(self):
+        api = MockAPI(state_at())
+        scheduler = self.scheduler(api, run_id="42", run_attempt=3)
+        scheduler.prepare("poll")
+        api.events.clear()
+        state = self.scheduler(api, run_id="900").prepare("disable")
+        self.assertEqual(api.events, ["persist:disabled", "send_due:false", "disable"])
+        self.assertEqual(state["last_send"]["run_id"], "42")
+        self.assertEqual(state["last_send"]["run_attempt"], 3)
+        self.assertEqual(state["last_send"]["status"], "uncertain")
+        self.assertEqual(state["last_send"]["occurred_at"], format_time(NOW))
 
     def test_future_plan_does_not_claim_or_send(self):
         api = MockAPI(state_at(NOW + timedelta(seconds=1)))

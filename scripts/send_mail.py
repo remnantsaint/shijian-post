@@ -34,7 +34,6 @@ def required(name):
 
 def address(name):
     value = required(name)
-    # Accept one bare mailbox only; avoid ambiguous recipients and header injection.
     if (value.count("@") != 1 or any(c.isspace() for c in value)
             or any(c in value for c in '<>,;:"\\')
             or not all(value.split("@"))):
@@ -56,14 +55,14 @@ def build_message(sender, recipient, kind):
         message["Subject"] = "邮件机器人测试：你好！"
         body = "这是一封来自 GitHub Actions 的测试邮件。\n中文 UTF-8 编码正常。祝你今天顺利！"
     elif kind == "random":
-        if __package__:
-            from .dragon_letters import make_letter
-        else:
-            from dragon_letters import make_letter
         if os.environ.get("MAIL_BODY") and os.environ.get("MAIL_SUBJECT"):
             subject, body = os.environ["MAIL_SUBJECT"], os.environ["MAIL_BODY"]
         else:
-            raise ConfigurationError("随机信件尚未预留，停止发送以避免重复")
+            if __package__:
+                from .dragon_letters import make_letter
+            else:
+                from dragon_letters import make_letter
+            subject, body = make_letter()
         message["Subject"] = subject
     else:
         raise ConfigurationError("MESSAGE_TYPE 仅支持 test 或 random")
@@ -118,7 +117,6 @@ def send():
         client = smtplib.SMTP_SSL("smtp.qq.com", 465, timeout=30,
                                   context=ssl.create_default_context())
         client.login(sender, password)
-        # Connection/login may take time; the header reflects actual submission.
         message.replace_header("Date", format_datetime(utc_now().astimezone(BEIJING)))
         refused = client.send_message(message, from_addr=sender, to_addrs=[recipient])
         if refused:
@@ -126,7 +124,6 @@ def send():
         accepted_at = format_utc(utc_now())
     finally:
         if client is not None:
-            # Once DATA was accepted, a QUIT failure must not suggest resending.
             try:
                 client.quit()
             except (OSError, smtplib.SMTPException):
@@ -161,7 +158,6 @@ def failure_details(exc):
         return "uncertain", "SMTP 服务器拒绝发送或连接中断；若已接收邮件正文，请先检查收件箱再重试。"
     if isinstance(exc, (TimeoutError, OSError)):
         return "uncertain", "SMTP 网络错误或超时：请检查 smtp.qq.com:465；若发生在提交正文时，重试前请先检查收件箱。"
-    # Never use raw exception strings: servers may echo credentials/addresses.
     return "uncertain", "发送发生未预期错误；为保护凭据，未输出底层异常内容。"
 
 

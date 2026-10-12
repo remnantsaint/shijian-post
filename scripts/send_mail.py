@@ -60,7 +60,10 @@ def build_message(sender, recipient, kind):
             from .dragon_letters import make_letter
         else:
             from dragon_letters import make_letter
-        subject, body = make_letter()
+        if os.environ.get("MAIL_BODY") and os.environ.get("MAIL_SUBJECT"):
+            subject, body = os.environ["MAIL_SUBJECT"], os.environ["MAIL_BODY"]
+        else:
+            raise ConfigurationError("随机信件尚未预留，停止发送以避免重复")
         message["Subject"] = subject
     else:
         raise ConfigurationError("MESSAGE_TYPE 仅支持 test 或 random")

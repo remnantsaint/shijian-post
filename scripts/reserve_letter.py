@@ -25,6 +25,13 @@ def letter(number):
     return subject, "\n\n".join((opening, scene, *extras, thought, closing))
 
 
+def mask_for_actions(value):
+    if not value:
+        return
+    safe = value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    print(f"::add-mask::{safe}")
+
+
 def main():
     api = GitHubAPI(os.environ["GITHUB_REPOSITORY"], os.environ["GH_TOKEN"])
     endpoint = f"/repos/{api.repo}/contents/{PATH}"
@@ -51,6 +58,13 @@ def main():
         payload["sha"] = sha
     api.request("PUT", endpoint, payload)
     subject, body = letter(number)
+
+    # Mask the surprise content before exporting it to later workflow steps.
+    mask_for_actions(subject)
+    for line in body.splitlines():
+        if line.strip():
+            mask_for_actions(line)
+
     env_path = os.environ["GITHUB_ENV"]
     marker = "DRAGON_LETTER_END_" + str(number)
     with open(env_path, "a", encoding="utf-8") as f:

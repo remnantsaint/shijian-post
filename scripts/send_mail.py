@@ -56,12 +56,12 @@ def build_message(sender, recipient, kind):
         message["Subject"] = "邮件机器人测试：你好！"
         body = "这是一封来自 GitHub Actions 的测试邮件。\n中文 UTF-8 编码正常。祝你今天顺利！"
     elif kind == "random":
-        message["Subject"] = "今日随机小消息"
-        body = random.choice([
-            "记得喝水，也给自己一点休息的时间。",
-            "今天也可以从一件小事开始，慢慢向前。",
-            "愿你今天遇到一件让你微笑的小事。",
-        ])
+        if __package__:
+            from .dragon_letters import make_letter
+        else:
+            from dragon_letters import make_letter
+        subject, body = make_letter()
+        message["Subject"] = subject
     else:
         raise ConfigurationError("MESSAGE_TYPE 仅支持 test 或 random")
     message.set_content(body, charset="utf-8")

@@ -2,16 +2,23 @@ name: 小龙娘来信
 on:
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   send:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    concurrency:
+      group: mail-bot-unique-letters
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Reserve never-reused letter
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python -m scripts.reserve_letter
       - name: Send personal letter via QQ SMTP
         env:
           QQ_EMAIL: ${{ secrets.QQ_EMAIL }}

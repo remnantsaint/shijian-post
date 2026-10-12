@@ -9,11 +9,15 @@ from email.message import EmailMessage
 from email.utils import format_datetime, formataddr, make_msgid
 
 if __package__:
-    from .send_mail import address, required, failure_details
+    from .send_mail import address, required, failure_details, add_image_attachment
     from .time_utils import BEIJING, format_beijing, format_utc, parse_utc, utc_now
 else:
-    from send_mail import address, required, failure_details
+    from send_mail import address, required, failure_details, add_image_attachment
     from time_utils import BEIJING, format_beijing, format_utc, parse_utc, utc_now
+
+
+MAX_BODY_CHARS = 100_000
+MAX_IMAGES = 4
 
 
 def text_env(name, max_chars):
@@ -27,12 +31,27 @@ def text_env(name, max_chars):
     return value
 
 
+def image_paths_from_env():
+    paths = []
+    single = os.environ.get("IMAGE_PATH", "").strip()
+    multiple = os.environ.get("IMAGE_PATHS", "").strip()
+    if single:
+        paths.append(single)
+    if multiple:
+        paths.extend(part.strip() for part in multiple.split(";") if part.strip())
+    # Preserve order while avoiding duplicate attachments.
+    paths = list(dict.fromkeys(paths))
+    if len(paths) > MAX_IMAGES:
+        raise ValueError(f"配图最多支持 {MAX_IMAGES} 张")
+    return paths
+
+
 def send():
     sender = address("QQ_EMAIL")
     password = required("QQ_SMTP_AUTH_CODE")
     recipient = address("MAIL_TO")
     subject = text_env("MAIL_SUBJECT", 120)
-    body = text_env("MAIL_BODY", 8000)
+    body = text_env("MAIL_BODY", MAX_BODY_CHARS)
     from_name = os.environ.get("MAIL_FROM_NAME", "小龙娘").strip() or "小龙娘"
 
     message = EmailMessage(policy=policy.SMTP)
@@ -42,6 +61,9 @@ def send():
     message["Date"] = format_datetime(utc_now().astimezone(BEIJING))
     message["Message-ID"] = make_msgid(domain="qq.com")
     message.set_content(body, charset="utf-8")
+
+    for image_path in image_paths_from_env():
+        add_image_attachment(message, image_path)
 
     client = None
     try:
@@ -69,10 +91,10 @@ def send():
 def main():
     try:
         accepted_at = send()
-    except (ValueError, Exception) as exc:
+    except Exception as exc:
         status, explanation = failure_details(exc)
         if isinstance(exc, ValueError) and status == "uncertain":
-            explanation = "邮件文案配置错误；未尝试发送。"
+            explanation = "邮件文案或配图配置错误；未尝试发送。"
         print(explanation, file=sys.stderr)
         return 1
     print(

@@ -211,8 +211,7 @@ class Scheduler:
         self.output = output or (lambda due: None)
 
     def disable_workflow(self):
-        self.api.request("PUT", f"/repos/{self.api.repo}/actions/workflows/{WORKFLOW_FILE}/disable")
-        print("随机计划工作流已停用；需要新的计划时请先在 Actions 中启用工作流。")
+        print("随机计划已结束或暂停；保留工作流启用状态，以便后续定时检查和重新安排。")
 
     def next_time(self, lower, upper):
         return format_time(self.now() + timedelta(minutes=self.choose_delay(lower, upper)))

@@ -39,7 +39,6 @@ def image_paths_from_env():
         paths.append(single)
     if multiple:
         paths.extend(part.strip() for part in multiple.split(";") if part.strip())
-    # Preserve order while avoiding duplicate attachments.
     paths = list(dict.fromkeys(paths))
     if len(paths) > MAX_IMAGES:
         raise ValueError(f"配图最多支持 {MAX_IMAGES} 张")
@@ -95,6 +94,17 @@ def send():
     return accepted_at
 
 
+def write_accepted_output(accepted_at):
+    path = os.environ.get("GITHUB_OUTPUT")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as output:
+            output.write(f"accepted_at={accepted_at}\n")
+    except OSError:
+        print("SMTP 已接受，但接受时间输出保存失败；不要因此重复发送。", file=sys.stderr)
+
+
 def main():
     try:
         accepted_at = send()
@@ -104,6 +114,7 @@ def main():
             explanation = "邮件文案或配图配置错误；未尝试发送。"
         print(explanation, file=sys.stderr)
         return 1
+    write_accepted_output(accepted_at)
     print(
         f"QQ SMTP 已接受小作文邮件，北京时间 {format_beijing(parse_utc(accepted_at))}；"
         "请以收件箱最终投递为准。"

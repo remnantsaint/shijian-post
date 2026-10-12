@@ -259,7 +259,7 @@ class SchedulerTests(unittest.TestCase):
                 self.assertEqual(state["history"][-1]["status"], "uncertain")
                 scheduler.prepare("poll")
                 self.assertEqual(api.events.count("send_due:true"), 1)
-                self.assertEqual(api.events[-2:], ["send_due:false"])
+                self.assertEqual(api.events[-2:], ["persist:paused", "send_due:false"])
 
     def test_completed_plan_stays_idle_without_disabling_workflow(self):
         api = MockAPI(state_at())

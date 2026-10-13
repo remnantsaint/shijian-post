@@ -86,6 +86,8 @@ def next_target(task, accepted_at, *, choose=None):
 
 def validate(task):
     try:
+        from .issue_relay import validate as validate_relay
+        validate_relay(task)
         task_id(task['id'])
         if task['status'] not in STATES or task['content']['kind'] not in {'test','random','dragon','custom','comic'}:
             raise ValueError
@@ -227,6 +229,8 @@ class Tasks:
             entry = {**task['claim'],'status':result,'occurred_at':accepted_at or ended,
                      'time_source':'smtp_accepted' if accepted_at else 'result_recorded'}
             task['history'] = (task['history']+[entry])[-20:]
+            from .issue_relay import finish as finish_relay
+            finish_relay(task, result)
             task.update(status=result,last_result=result,claim=None,finished_at=ended,reason=reason)
             if accepted_at: task['accepted_at'] = format_utc(parse_utc(accepted_at))
             if result == 'accepted' and task['repeat']:

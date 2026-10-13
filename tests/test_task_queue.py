@@ -27,6 +27,8 @@ class TaskAPI(FakeAPI):
         self.conflict=False;self.uncertain_write=False;self.active=True
 
     def request(self,method,path,data=None):
+        if '/issues?' in path:
+            return []
         if '/contents/'+PATH in path:
             self.calls.append((method,path,copy.deepcopy(data)))
             if method=='GET':

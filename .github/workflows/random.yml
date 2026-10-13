@@ -100,6 +100,7 @@ jobs:
     permissions:
       contents: write
       actions: read
+      issues: read
     concurrency:
       group: mail-bot-tasks-${{ github.event_name == 'schedule' && 'poll' || inputs.action == '查看状态' && 'status' || 'control' }}
       cancel-in-progress: false

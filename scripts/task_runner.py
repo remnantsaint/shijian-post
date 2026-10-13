@@ -188,6 +188,8 @@ def deliver(api,task,*,smtp_sender=None):
         elif kind in {'random','dragon'}:
             from .reserve_letter import reserve
             _,subject,body=reserve(api)
+            from .issue_relay import render
+            body += render(task.get('issue_relay', []))
             os.environ.update(MAIL_SUBJECT=subject,MAIL_BODY=body,MESSAGE_TYPE='random')
         else:os.environ['MESSAGE_TYPE']='test'
         if task['content'].get('attachment'):
@@ -243,6 +245,14 @@ def run(api,selection='poll',*,sender=None,now=None):
         if claimed is None:continue
         result=None
         try:
+            from .issue_relay import DAILY_KINDS, collect, reserve as reserve_relay
+            if claimed['content']['kind'] in DAILY_KINDS:
+                try:
+                    claimed = reserve_relay(store, claimed, collect(api))
+                except (TaskError, GitHubAPIError):
+                    raise
+                except Exception:
+                    raise TaskError('留言准备失败，尚未调用 SMTP；未转达，不自动重试本任务。') from None
             result=(sender or (lambda task:deliver(api,task)))(claimed)
             if not isinstance(result,dict):raise ValueError('missing receipt')
             parse_utc(result['accepted_at'])

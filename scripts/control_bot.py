@@ -226,7 +226,7 @@ class Controller:
             raise ControlError("仅允许取消邮件发送、来信或随机计划工作流；未提交取消。")
         if run["workflow_id"] == unified_id and run.get("event") != "schedule":
             if run.get("display_title") not in {"发送测试邮件", "发送随机来信", "发送小龙娘来信",
-                                               "发送自定义邮件", "安排一次", "循环随机发送", "关闭计划"}:
+                                               "发送自定义邮件", "发送漫画邮件", "安排一次", "循环随机发送", "关闭计划"}:
                 raise ControlError("统一入口的代码检查或只读查询不属于邮件发送；未提交取消。")
         if run.get("status") == "completed":
             self.output("该运行已结束，没有提交取消或重跑。邮件仍可能已被 SMTP 接受，请查看历史和收件箱。")

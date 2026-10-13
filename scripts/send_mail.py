@@ -225,6 +225,8 @@ def append_send_summary(status, result=None, explanation=""):
     if result:
         summary += f"| 图片附件 | {'有' if result['has_image'] else '无'} |\n\n"
         summary += "SMTP 接受不等于最终投递或已读，请以收件邮箱为准。\n"
+        if explanation:
+            summary += f"\n{html.escape(explanation)}\n"
     else:
         summary += f"\n{html.escape(explanation)}\n"
     summary += "\n本记录仅保存发送元数据，不保存主题、正文、附件路径、邮箱地址或授权码。\n"

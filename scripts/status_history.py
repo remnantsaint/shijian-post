@@ -17,7 +17,7 @@ from .random_scheduler import UNIFIED_WORKFLOW_NAME
 
 SEND_STEP = "Send mail through QQ SMTP"
 SEND_STEPS = frozenset({SEND_STEP, "Send long personal letter through QQ SMTP",
-                        "Send personal letter via QQ SMTP"})
+                        "Send personal letter via QQ SMTP", "Send comic mail through QQ SMTP"})
 LETTER_WORKFLOW = "dragon-letter.yml"
 LETTER_LABEL = "小龙娘来信"
 WAIT_STEP = "Wait before sending"
@@ -143,7 +143,7 @@ def read_workflow_runs(api, repo, filename, label, optional=False, send_only=Fal
         # Unified status/CI/control runs are never interpreted as mail attempts.
         runs = [run for run in runs if run.get("event") == "workflow_dispatch"
                 and run.get("display_title") in {"发送测试邮件", "发送随机来信",
-                                                   "发送小龙娘来信", "发送自定义邮件"}]
+                                                   "发送小龙娘来信", "发送自定义邮件", "发送漫画邮件"}]
     entries = []
     recent_runs = sorted(runs[:20], key=lambda run: timestamp(
         run.get("updated_at") or run.get("created_at")), reverse=True)

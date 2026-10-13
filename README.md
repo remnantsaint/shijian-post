@@ -1,6 +1,8 @@
 # QQ 邮件机器人
 
 一个 GitHub Actions 工作流、一份持久任务账本、一套发送生命周期。
+
+自定义 GPT 的安全调用配置见 [GPT Actions 接入说明](docs/gpt-actions.md)。该配置复用 GitHub API，仍需在 GPT 编辑器配置认证；自动上传 GPT 新生成图片尚未打通。
 通过 Python 标准库和 QQ SMTP SSL 发送中文 UTF-8 邮件，支持随机长信、小龙娘来信、自定义内容及图片漫画。
 不需要常驻服务器或第三方 Python 依赖。
 

@@ -1,0 +1,224 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Mail bot GPT Actions",
+    "version": "1.0.0",
+    "description": "仅对 xurenqi/mail-bot 提交与查询邮件任务；不提供二进制图片上传。"
+  },
+  "servers": [
+    {
+      "url": "https://api.github.com"
+    }
+  ],
+  "security": [
+    {
+      "githubToken": []
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "githubToken": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "paths": {
+    "/repos/xurenqi/mail-bot/actions/workflows/random.yml/dispatches": {
+      "post": {
+        "operationId": "submitMailTask",
+        "summary": "提交一次邮件任务；不代表发送成功",
+        "x-openai-isConsequential": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "ref",
+                  "inputs"
+                ],
+                "properties": {
+                  "ref": {
+                    "type": "string",
+                    "enum": [
+                      "main"
+                    ]
+                  },
+                  "inputs": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "action",
+                      "request_id"
+                    ],
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "发送自定义邮件",
+                          "发送随机来信",
+                          "发送小龙娘来信",
+                          "发送漫画邮件"
+                        ]
+                      },
+                      "request_id": {
+                        "type": "string",
+                        "description": "同一请求保持相同的小写 UUID；漫画使用已有草稿附件时填空字符串，按附件去重。",
+                        "pattern": "^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$"
+                      },
+                      "custom_subject": {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      "custom_body": {
+                        "type": "string",
+                        "maxLength": 10000,
+                        "description": "不得包含邮箱、密码、令牌等私密内容，触发参数可能出现在运行记录。正文结尾填写实际北京时间。"
+                      },
+                      "image_path": {
+                        "type": "string",
+                        "description": "漫画只用已上传到草稿 Release 的 draft:文件名 或 asset:编号；不能填写聊天图片 URL。"
+                      },
+                      "timing": {
+                        "type": "string",
+                        "description": "now、after:2m、带时区的 ISO 时间，或 random:5m:2d。Actions 可能延迟。"
+                      },
+                      "expires_at": {
+                        "type": "string",
+                        "description": "可选截止时间，必须带时区；超过后不发送。"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "GitHub 已接受触发请求；实际任务结果需要查询。"
+          }
+        }
+      }
+    },
+    "/repos/xurenqi/mail-bot/contents/.mail-bot/tasks.json": {
+      "get": {
+        "operationId": "readMailTasks",
+        "summary": "读取任务状态、历史和清理结果；不触发发送",
+        "responses": {
+          "200": {
+            "description": "任务账本；accepted 只代表 SMTP 接受。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mail-bot-state"
+              ]
+            }
+          },
+          {
+            "name": "Accept",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "application/vnd.github.raw+json"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "/repos/xurenqi/mail-bot/actions/workflows/random.yml/runs": {
+      "get": {
+        "operationId": "listMailRuns",
+        "summary": "查看最近的手动工作流运行",
+        "responses": {
+          "200": {
+            "description": "工作流运行列表，绿灯本身不是 SMTP 接受证据。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "event",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "workflow_dispatch"
+              ]
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "enum": [
+                5
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "/repos/xurenqi/mail-bot/actions/runs/{run_id}": {
+      "get": {
+        "operationId": "readMailRun",
+        "summary": "查询任务历史中对应的工作流运行",
+        "responses": {
+          "200": {
+            "description": "工作流状态。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ]
+      }
+    }
+  }
+}

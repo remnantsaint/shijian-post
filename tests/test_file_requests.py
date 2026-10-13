@@ -9,7 +9,7 @@ import unittest
 import uuid
 from unittest.mock import patch
 
-from scripts import file_requests
+from scripts import file_requests, task_runner
 from scripts.task_queue import TaskStore, TaskError
 from test_task_queue import TaskAPI
 
@@ -129,6 +129,16 @@ class FileRequestTests(unittest.TestCase):
         for change in ({'before':'0'*40},{'after':'c'*40}):
             with self.assertRaises(TaskError):
                 file_requests.added_requests(self.api,{**self.event,**change})
+
+    def test_push_cli_selects_file_entry_without_calling_smtp(self):
+        with patch.object(task_runner,'api_from_environment',return_value=self.api), \
+                patch.object(file_requests,'prepare',return_value=None) as ingest, \
+                patch.object(task_runner,'prepare') as manual, \
+                patch('scripts.send_mail.send') as smtp:
+            self.assertEqual(task_runner.main(['prepare']),0)
+            ingest.assert_called_once_with(self.api)
+            manual.assert_not_called()
+            smtp.assert_not_called()
 
 
 if __name__ == '__main__':

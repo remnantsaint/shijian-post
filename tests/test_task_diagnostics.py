@@ -1,5 +1,6 @@
 import contextlib
 import io
+import os
 import unittest
 from unittest.mock import patch
 
@@ -12,6 +13,7 @@ class TaskDiagnosticsTests(unittest.TestCase):
         output = io.StringIO()
         with patch.object(task_runner, 'api_from_environment', return_value=object()), \
                 patch.object(task_runner, 'prepare', side_effect=error) as prepare, \
+                patch.dict(os.environ, {'GITHUB_EVENT_NAME':'workflow_dispatch'}), \
                 contextlib.redirect_stderr(output):
             self.assertEqual(task_runner.main(['prepare']), 1)
         prepare.assert_called_once()

@@ -61,12 +61,12 @@ run-name: ${{ github.event_name == 'schedule' && '定时检查' || github.event_
         - 3 分钟内随机发送
         default: 立即发送
       image_path:
-        description: 图片路径（可选，例如 images/photo.jpg）
+        description: 图片来源：images/photo.png；漫画可填 draft:图片文件名 或 asset:附件编号
         type: string
         required: false
         default: ''
       request_id:
-        description: 漫画上传请求编号（由上传命令生成/指定，其余功能留空）
+        description: 自动上传的请求编号；手机草稿图片发送时留空（自动去重）
         type: string
         required: false
         default: ''
@@ -309,4 +309,5 @@ jobs:
       if: ${{ always() && steps.comic.outputs.claimed == 'true' }}
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        COMIC_REQUEST_ID: ${{ steps.comic.outputs.request_id }}
       run: python -m scripts.comic_mail cleanup

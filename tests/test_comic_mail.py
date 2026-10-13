@@ -76,6 +76,10 @@ class FakeAPI:
             return copy.deepcopy(self.release)
         if path.endswith('/releases/10/assets?per_page=100'):
             return [copy.deepcopy(asset['metadata']) for asset in self.assets.values()]
+        if method == 'PATCH' and '/releases/assets/' in path:
+            aid = int(path.rsplit('/',1)[1])
+            self.assets[aid]['metadata']['name'] = data['name']
+            return copy.deepcopy(self.assets[aid]['metadata'])
         if method == 'DELETE' and '/releases/assets/' in path:
             if self.fail_cleanup:
                 raise GitHubAPIError('private cleanup detail', status=403)
@@ -138,6 +142,67 @@ class ComicTests(unittest.TestCase):
 
     def record(self):
         return self.api.records[self.rid][0]
+
+    def manual_asset(self):
+        data=png()
+        self.api.assets[20]={'metadata':{'id':20,'name':'手机漫画.png','size':len(data),
+                                       'state':'uploaded','content_type':'image/png'},'data':data}
+
+    @patch('scripts.send_mail.smtplib.SMTP_SSL')
+    def test_mobile_upload_register_send_cleanup_without_external_binary_upload(self,smtp):
+        smtp.return_value.send_message.return_value={}
+        self.manual_asset()
+        event=json.loads(self.event.read_text())
+        event['inputs'].update(request_id='',image_path='draft:手机漫画.png')
+        self.event.write_text(json.dumps(event))
+        self.rid=str(uuid.uuid5(uuid.NAMESPACE_URL,f'mail-bot:{self.api.repo}:asset:20'))
+        with patch('scripts.send_mail.REPOSITORY_ROOT',self.root):
+            self.assertEqual(comic.receive(self.api,root=self.root),0)
+        self.assertEqual(self.record()['status'],'accepted')
+        self.assertEqual(list(smtp.return_value.send_message.call_args.args[0].iter_attachments())[0].get_payload(decode=True),png())
+        self.assertFalse(any(method=='UPLOAD' for method,_,_ in self.api.calls))
+        comic.cleanup(self.api)
+        self.assertEqual(self.record()['cleanup'],'deleted')
+        with self.assertRaises(comic.ComicError):comic.receive(self.api,root=self.root)
+        smtp.return_value.send_message.assert_called_once()
+
+    def test_same_asset_id_has_one_registration_regardless_of_selector(self):
+        self.manual_asset()
+        rid=comic.adopt(self.api,'draft:手机漫画.png','漫画来信','小澪的中文漫画正文。')
+        self.assertEqual(rid,str(uuid.uuid5(uuid.NAMESPACE_URL,f'mail-bot:{self.api.repo}:asset:20')))
+        with self.assertRaises(comic.ComicError):
+            comic.adopt(self.api,'asset:20','另一个标题','另一段正文')
+        self.assertEqual(len(self.api.records),1)
+
+    def test_automatic_asset_cannot_be_registered_under_a_new_request(self):
+        self.upload()
+        with self.assertRaises(comic.ComicError):
+            comic.adopt(self.api,'asset:20','title','body')
+        self.assertEqual(len(self.api.records),1)
+
+    def test_manual_selector_does_not_allow_url_or_path_injection(self):
+        for source in ('https://evil.example/private','draft:../file.png','draft:x\n.png','asset:-1','asset:20/other'):
+            with self.assertRaises(comic.ComicError):comic.adopt(self.api,source,'title','body')
+        self.assertFalse(self.api.calls)
+
+    def test_manual_published_release_and_corrupt_asset_are_rejected(self):
+        self.manual_asset();self.api.release['draft']=False
+        with self.assertRaises(comic.ComicError):comic.adopt(self.api,'asset:20','title','body')
+        self.assertFalse(self.api.records)
+        self.api.release['draft']=True;self.api.tamper=True
+        with self.assertRaises(comic.ComicError):comic.adopt(self.api,'asset:20','title','body')
+        self.assertFalse(self.api.records)
+
+    def test_uncertain_rename_preserves_tombstone_and_prevents_resubmission(self):
+        self.manual_asset();original=self.api.request
+        def request(method,path,data=None):
+            result=original(method,path,data)
+            if method=='PATCH':raise GitHubAPIError('private lost response')
+            return result
+        with patch.object(self.api,'request',side_effect=request),self.assertRaises(GitHubAPIError):
+            comic.adopt(self.api,'asset:20','title','body')
+        with self.assertRaises(comic.ComicError):comic.adopt(self.api,'asset:20','title','body')
+        self.assertEqual(sum(method=='PATCH' for method,_,_ in self.api.calls),1)
 
     def test_upload_uses_binary_draft_asset_and_dispatches_only_metadata(self):
         self.upload()

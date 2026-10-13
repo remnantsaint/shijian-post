@@ -1,5 +1,41 @@
 # ChatGPT 漫画 → 图片邮件
 
+## 通用入口：手机、电脑与自动调用
+
+不限定图片来自 ChatGPT：其他工具生成的 PNG/JPEG/静态 WebP 也适用。
+既有命令行上传保持可用；手机可以先在 GitHub 浏览器上传草稿附件，由 Actions 自行登记并发送，
+不需要给 Codex 添加上传域名，也不需要安装终端或填写令牌。
+
+### 手机直接操作
+
+1. 保存生成的图片（不超过 5 MiB）。登录 GitHub，打开仓库的临时草稿 Release 编辑页。
+   本仓库可用草稿：[编辑临时图片草稿](https://github.com/xurenqi/mail-bot/releases/edit/untagged-f25a24bc9db733dfd202)。
+   若链接变化，进入仓库 Releases，找到 `Mail bot temporary images (keep draft)`，点击编辑。
+2. 在附件区选择手机图片，等上传完成，点击 **Save draft（保存草稿）**，不要发布。
+3. 打开 **Actions → 邮件机器人（统一入口） → Run workflow**，操作选 **发送漫画邮件**。
+4. `image_path` 填 `draft:图片的完整文件名`，例如 `draft:漫画.png`；文件名须与草稿附件一致。
+   填写 `custom_body`（必填）和可选 `custom_subject`，`request_id` 留空。
+5. 运行一次。Actions 登记附件、发送并删除附件；摘要与历史保留，不会将图片提交到 Git。
+
+手机 GitHub App 如果无法编辑草稿附件，可用手机浏览器；必要时切换浏览器的桌面网站模式。
+动作名称虽然叫“漫画邮件”，普通图片也可使用。上传后不要改动/重命名同一附件再尝试重复发送。
+手动附件登记时会自动改名为安全内部名称，按附件 ID 生成稳定 UUID，文件名不是重复发送凭据。
+若登记响应丢失，禁止重跑；先根据日志中的请求编号查询结果。
+
+### 由助手或其他自动工具接收已上传的附件
+
+已上传的草稿附件也可用已授权的终端登记并触发，无需再次上传二进制：
+
+```sh
+python -m scripts.comic_mail --repo xurenqi/mail-bot register \
+  --asset 'draft:漫画.png' \
+  --message-file /tmp/comic-message.json
+```
+
+也支持 `--asset asset:附件编号`。只接受同一仓库的临时草稿 Release 附件，不接受任意网址、
+公共 Release、路径跳转或不匹配的类型。编号由附件 ID 决定，同一附件不能被登记成两个请求。
+原来的 `upload --image ... --request-id ...` 自动上传接口继续支持。
+
 ## 当前工具能做什么
 
 本次检查的会话提供图片生成工具、终端和已绑定的 GitHub 身份；没有可调用的 GitHub 连接器工具、
@@ -71,8 +107,9 @@ python -m scripts.comic_mail --repo xurenqi/mail-bot status \
 
 然后检查 **Actions → 邮件机器人（统一入口）** 中 `发送漫画邮件` 的运行与 SMTP 步骤。
 `upload` 返回成功只表示提交获确认，不表示工作流执行完成或最终收件。
-上传入口会自动提供 `request_id`、`custom_subject`、`custom_body`，无需手动填写 `image_path`。
-在 Actions 单独选择“发送漫画邮件”却没有对应上传记录会被拒绝，这是正常防重复检查。
+自动上传入口会提供 `request_id`、`custom_subject`、`custom_body`，无需手动填写 `image_path`。
+手机手动路径允许编号留空并填写 `draft:文件名` 或 `asset:编号`，由 Actions 创建登记记录。
+既无上传请求编号又无已上传草稿附件的触发会被拒绝，这是正常检查。
 
 ## 结果和重复处理
 

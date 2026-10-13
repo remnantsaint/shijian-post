@@ -9,6 +9,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import stat
@@ -278,6 +279,11 @@ def upload(api, image, subject, body, rid):
         except Exception:
             pass
         raise
+    dispatch(api, rid, subject, body)
+    return rid
+
+
+def dispatch(api, rid, subject, body):
     repo = api.request("GET", f"/repos/{api.repo}")
     branch = repo.get("default_branch")
     if not isinstance(branch, str) or not branch:
@@ -286,6 +292,59 @@ def upload(api, image, subject, body, rid):
     api.request("POST", f"/repos/{api.repo}/actions/workflows/{WORKFLOW}/dispatches", {
         "ref": branch, "inputs": {"action": ACTION, "request_id": rid,
                                     "custom_subject": subject, "custom_body": body}})
+
+
+def adopt(api, source, subject, body):
+    """Register an authenticated, manually uploaded draft asset once by asset ID."""
+    content(subject, body)
+    if not isinstance(source, str):
+        raise ComicError("附件来源必须为 draft:文件名 或 asset:正整数编号")
+    asset_id = None
+    if re.fullmatch(r"asset:[1-9][0-9]{0,19}", source):
+        asset_id = int(source.split(":", 1)[1])
+    elif source.startswith("draft:"):
+        name = source[6:]
+        if (not name or len(name) > 200 or "/" in name or "\\" in name or ".." in name
+                or any(not char.isprintable() for char in name)):
+            raise ComicError("草稿附件文件名无效；不能包含路径、换行或控制字符")
+    else:
+        raise ComicError("附件来源必须为 draft:文件名 或 asset:正整数编号；不接受任意网址")
+    release_id = draft_release(api)
+    assets = api.request("GET", f"/repos/{api.repo}/releases/{release_id}/assets?per_page=100")
+    matches = [item for item in assets if (item.get("id") == asset_id if asset_id is not None
+                                          else item.get("name") == name)]
+    if len(matches) != 1:
+        raise ComicError("未找到唯一的草稿附件；请先保存草稿，确认附件已上传完成")
+    asset = matches[0]
+    asset_id = asset.get("id")
+    if (type(asset_id) is not int or asset_id <= 0 or asset.get("state") != "uploaded"
+            or type(asset.get("size")) is not int or not 0 < asset["size"] <= MAX_BYTES):
+        raise ComicError("草稿附件身份、状态或大小无效")
+    store = Requests(api)
+    # Automatic uploads already own a request; adopting them must not bypass it.
+    canonical = re.fullmatch(r"mailbot-([0-9a-f-]{36})\.(png|jpg|webp)", asset.get("name", ""))
+    if canonical and store.load(request_id(canonical[1]))[0] is not None:
+        raise ComicError("这个附件已有发送请求；请查询原请求，禁止重复登记")
+    rid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"mail-bot:{api.repo}:asset:{asset_id}"))
+    print(f"漫画请求编号：{rid}；同一草稿附件只能登记一次。")
+    if store.load(rid)[0] is not None:
+        raise ComicError("这个附件已登记或处理；禁止通过重复运行再次发送")
+    data = api.download_release_asset(asset_id, MAX_BYTES)
+    extension, mime = image_type(data)
+    expected = {".png": "png", ".jpg": "jpg", ".jpeg": "jpg", ".webp": "webp"}
+    if expected.get(Path(asset.get("name", "")).suffix.lower()) != extension or len(data) != asset["size"]:
+        raise ComicError("草稿附件扩展名、类型或大小不一致")
+    StateStore(api).ensure_branch()
+    image_sha = hashlib.sha256(data).hexdigest()
+    record = {"version": 1, "id": rid, "status": "dispatching", "created_at": format_utc(utc_now()),
+              "image_sha256": image_sha, "payload_sha256": digest_payload(subject, body, image_sha),
+              "mime": mime, "size": len(data), "cleanup": "pending",
+              "asset_id": asset_id, "release_id": release_id}
+    store.save(record)  # A competing registration or an uncertain write cannot retry.
+    renamed = api.request("PATCH", f"/repos/{api.repo}/releases/assets/{asset_id}",
+                          {"name": f"mailbot-{rid}.{extension}"})
+    if renamed.get("id") != asset_id or renamed.get("name") != f"mailbot-{rid}.{extension}":
+        raise ComicError("附件登记响应未获确认；禁止重跑，请先核验请求")
     return rid
 
 
@@ -296,7 +355,7 @@ def event_inputs():
         if len(text) > 1024 * 1024:
             raise ValueError
         inputs = json.loads(text)["inputs"]
-        rid = request_id(inputs["request_id"])
+        rid = request_id(os.environ.get("COMIC_REQUEST_ID") or inputs.get("request_id"))
         subject, body = content(inputs.get("custom_subject", ""), inputs.get("custom_body", ""))
         if inputs.get("action") != ACTION:
             raise ValueError
@@ -315,7 +374,20 @@ def output(name, value):
 def receive(api, *, sender=None, root=None):
     if os.environ.get("GITHUB_ACTIONS", "").lower() != "true":
         raise ComicError("漫画接收入口仅供 Actions 调用；本地请使用 upload 或 status")
+    if not os.environ.get("COMIC_REQUEST_ID"):
+        with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as stream:
+            raw = stream.read(1024 * 1024 + 1)
+        if len(raw) > 1024 * 1024:
+            raise ComicError("触发参数超过大小限制")
+        inputs = json.loads(raw)["inputs"]
+        if inputs.get("action") != ACTION:
+            raise ComicError("漫画邮件操作无效")
+        if not inputs.get("request_id"):
+            rid = adopt(api, inputs.get("image_path", ""), inputs.get("custom_subject", ""),
+                        inputs.get("custom_body", ""))
+            os.environ["COMIC_REQUEST_ID"] = rid
     rid, subject, body = event_inputs()
+    output("request_id", rid)
     store = Requests(api)
     record, sha = store.load(rid)
     if record is None or record["status"] != "dispatching":
@@ -428,6 +500,9 @@ def main(argv=None):
         uploader.add_argument("--image", required=True)
         uploader.add_argument("--message-file", required=True)
         uploader.add_argument("--request-id", required=True)
+        registrar = commands.add_parser("register", help="登记手机/浏览器已上传的草稿附件并触发发送")
+        registrar.add_argument("--asset", required=True, help="draft:文件名 或 asset:编号")
+        registrar.add_argument("--message-file", required=True)
         inspect = commands.add_parser("status")
         inspect.add_argument("--request-id", required=True)
         commands.add_parser("receive")
@@ -439,7 +514,7 @@ def main(argv=None):
         if not token:
             raise ComicError("缺少安全绑定的 GitHub 身份；不要将令牌发送到聊天")
         api = GitHubAPI(args.repo, token)
-        if args.command == "upload":
+        if args.command in {"upload", "register"}:
             with open(args.message_file, encoding="utf-8") as stream:
                 text = stream.read(128 * 1024 + 1)
             if len(text) > 128 * 1024:
@@ -447,7 +522,11 @@ def main(argv=None):
             message = json.loads(text)
             if not isinstance(message, dict) or set(message) != {"subject", "body"}:
                 raise ComicError("邮件描述文件仅允许 subject 和 body 两个字段")
-            upload(api, args.image, message["subject"], message["body"], args.request_id)
+            if args.command == "upload":
+                upload(api, args.image, message["subject"], message["body"], args.request_id)
+            else:
+                rid = adopt(api, args.asset, message["subject"], message["body"])
+                dispatch(api, rid, message["subject"], message["body"])
             print("上传与发送请求已提交；尚未确认 SMTP 接受或最终投递。禁止重复提交同一请求。")
         elif args.command == "status":
             record, _ = Requests(api).load(request_id(args.request_id))

@@ -83,6 +83,9 @@ GitHub、邮件服务及你主动授权的协作者仍可能访问相应数据�
 
 新增 `python -m scripts.comic_mail --repo owner/name upload` 上传入口，图片暂存到认证可见的草稿 Release，
 随后自动触发统一入口发送图片附件，结束后独立清理，图片不进入 Git 历史。
+手机无需终端：在 GitHub 浏览器先上传并保存草稿附件，再在统一入口选“发送漫画邮件”，
+`image_path` 填 `draft:图片文件名`，填写标题与正文，请求编号留空即可自动登记并发送。
+其他工具也能用 `scripts.comic_mail register --asset draft:文件名` 登记已有附件，不需要重新上传。
 每次任务使用固定 UUID，持久请求记录阻止重复发送；不确定结果不会自动重试。
 见 [漫画上传、调用、一次性任务限制与端到端测试](docs/comic-mail.md)。
 普通 ChatGPT 或仅能发提醒的定时任务不能假定拥有终端、文件访问及 GitHub 授权。

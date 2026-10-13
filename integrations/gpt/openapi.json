@@ -53,7 +53,9 @@
                     "additionalProperties": false,
                     "required": [
                       "action",
-                      "request_id"
+                      "request_id",
+                      "custom_subject",
+                      "custom_body"
                     ],
                     "properties": {
                       "action": {
@@ -72,12 +74,15 @@
                       },
                       "custom_subject": {
                         "type": "string",
-                        "maxLength": 200
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "description": "必填非空单行中文标题，先由 GPT 写好；不能省略。"
                       },
                       "custom_body": {
                         "type": "string",
                         "maxLength": 10000,
-                        "description": "不得包含邮箱、密码、令牌等私密内容，触发参数可能出现在运行记录。正文结尾填写实际北京时间。"
+                        "description": "必填非空中文正文，先由 GPT 写好再提交；不能省略。不得包含私密信息。不要猜测当前时间，后台会追加实际写信时间。",
+                        "minLength": 1
                       },
                       "image_path": {
                         "type": "string",

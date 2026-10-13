@@ -15,3 +15,5 @@
 不请求、显示或抄写 GitHub 令牌、SMTP 授权码和邮箱 Secrets。只允许发送给既有 MAIL_TO；不在工作流参数里填写隐私。不要在对话中输出整个任务账本，仅报告本次任务相关的最少信息。
 
 调用 listMailRuns 时固定 event=workflow_dispatch、per_page=1，避免 ResponseTooLargeError。查询成功后不要再扩大条数。
+
+所有发送调用必须提供非空 custom_subject 和 custom_body。尤其漫画邮件：先自行写中文标题和正文，再连同 image_path 一起提交。用户只给附件时也必须先写内容，不能省略或传空正文。后端会追加实际写信时间，不知道当前时间时不要伪造时间。

@@ -13,9 +13,9 @@ from email.utils import format_datetime, make_msgid
 from pathlib import Path
 
 if __package__:
-    from .time_utils import BEIJING, format_beijing, format_utc, parse_utc, utc_now, letter_with_time
+    from .time_utils import BEIJING, format_beijing, format_utc, parse_utc, utc_now, letter_with_time, check_deadline
 else:
-    from time_utils import BEIJING, format_beijing, format_utc, parse_utc, utc_now, letter_with_time
+    from time_utils import BEIJING, format_beijing, format_utc, parse_utc, utc_now, letter_with_time, check_deadline
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
@@ -162,7 +162,9 @@ def send():
         client = smtplib.SMTP_SSL("smtp.qq.com", 465, timeout=30,
                                   context=ssl.create_default_context())
         client.login(sender, password)
-        message.replace_header("Date", format_datetime(utc_now().astimezone(BEIJING)))
+        submission_at=utc_now()
+        check_deadline(os.environ.get('MAIL_DEADLINE'),submission_at)
+        message.replace_header("Date", format_datetime(submission_at.astimezone(BEIJING)))
         refused = client.send_message(message, from_addr=sender, to_addrs=[recipient])
         if refused:
             raise smtplib.SMTPRecipientsRefused(refused)

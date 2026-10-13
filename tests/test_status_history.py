@@ -25,6 +25,7 @@ class APIError(GitHubAPIError):
 
 
 class FakeAPI:
+    repo = REPO
     def __init__(self, runs=()):
         self.calls = []
         self.responses = {
@@ -71,6 +72,10 @@ def plan(history=()):
 
 
 class StatusTests(unittest.TestCase):
+    def test_unified_worker_green_is_not_smtp_evidence(self):
+        result=status.step_result(run(70),[{'steps':[{'name':status.TASK_STEP,'status':'completed','conclusion':'success'}]}])
+        self.assertNotEqual(result,'SMTP 已接受')
+        self.assertIn('账本',result)
     def test_unified_history_excludes_status_checks_and_recognizes_mail_steps(self):
         api = FakeAPI()
         api.responses[f'{BASE}/actions/workflows/main.yml'] = APIError(404)

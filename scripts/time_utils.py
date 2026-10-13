@@ -7,6 +7,15 @@ UTC = timezone.utc
 BEIJING = timezone(timedelta(hours=8))
 
 
+class DeadlineExpired(ValueError):
+    pass
+
+
+def check_deadline(deadline, at):
+    if deadline and parse_utc(deadline) < aware(at):
+        raise DeadlineExpired('任务超过最晚发送时间，未提交邮件。')
+
+
 def utc_now():
     return datetime.now(UTC)
 

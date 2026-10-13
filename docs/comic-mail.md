@@ -36,6 +36,28 @@ python -m scripts.comic_mail --repo xurenqi/mail-bot register \
 公共 Release、路径跳转或不匹配的类型。编号由附件 ID 决定，同一附件不能被登记成两个请求。
 原来的 `upload --image ... --request-id ...` 自动上传接口继续支持。
 
+## 已统一为邮件任务
+
+漫画上传/登记只保存附件绑定并触发任务，不再维护独立邮件占用、发送确认或失败状态。
+邮件生命周期统一保存到 `.mail-bot/tasks.json`；原 `.mail-bot/image-requests/` 只保留上传元数据和旧快照，
+正文通过草稿内容文件保存，不写公开任务账本。状态查询优先读取统一任务。
+
+手机发送时也能填 `timing`：`now`、`after:2m`、带时区时间或 `random:5m:2d`；
+可填 `repeat_rule=every:2h` 或随机范围，留空只发一次，`expires_at` 是可选截止时间。
+重复任务需要保留同一图片直到任务结束或取消，单次发送成功才删除。
+GitHub cron 约 5 分钟/每小时检查且可能延迟，“两分钟”是目标时间，不保证两分钟收到。
+
+自动命令同样支持 `--at`、`--repeat`、`--expires`，例如：
+
+```sh
+python -m scripts.comic_mail --repo xurenqi/mail-bot register \
+  --asset 'draft:漫画.png' --message-file /tmp/comic-message.json --at after:10m
+```
+
+已上传请求编号仍保持不变；同一附件/请求的重跑不创建第二个任务。
+任务处于 `sending/uncertain` 时不能重发；先核验收件箱与持久结果。
+旧的 `claimed` 迁为 `uncertain`；缺少正文的旧请求保持 `blocked`，不猜测或擅自重建内容。
+
 ## 当前工具能做什么
 
 本次检查的会话提供图片生成工具、终端和已绑定的 GitHub 身份；没有可调用的 GitHub 连接器工具、
@@ -43,7 +65,7 @@ python -m scripts.comic_mail --repo xurenqi/mail-bot register \
 这里的自动调用入口是终端中的 Python 命令，不是假设普通 ChatGPT 能直接请求任意 HTTP API。
 
 终端已验证 GitHub API 读取、草稿 Release 创建和 Actions 触发权限。
-当前云环境对 `uploads.github.com` 返回明确的代理访问拒绝；因此本次没有完成真实二进制上传或真实漫画邮件投递。
+当前云环境对 `uploads.github.com` 返回明确的代理访问拒绝；因此此前未完成真实二进制上传或真实漫画邮件投递。
 不要绕过代理或关闭 TLS。需在执行环境允许 `uploads.github.com`，并确认既有 GitHub 身份允许此上传目的地。
 下载需要 `api.github.com` 和 `release-assets.githubusercontent.com`；Actions 运行器使用自身内置令牌。
 可行替代方案是在有正常 GitHub 网络访问及授权的本地终端运行同一个上传命令。
@@ -117,13 +139,16 @@ python -m scripts.comic_mail --repo xurenqi/mail-bot status \
 | --- | --- |
 | uploading / upload_failed / upload_uncertain | 上传未完成或待核验，没有自动提交邮件重试 |
 | dispatching | 发送请求可能已提交、待执行或提交结果待核验，禁止重复提交 |
-| claimed | 已被一个运行占用；可能正在处理或结果写入未获确认，禁止重跑 |
+| sending（旧 claimed） | 已被一个运行占用，禁止重跑；中断后只记不确定，不重新发送 |
+| queued | 等待目标时间；有重复规则时可能已经成功发送过前一轮 |
+| staging / blocked | 内容准备中或旧请求缺少内容，需要核验，尚未执行 SMTP |
+| expired / cancelled | 已过截止时间或已取消，不执行新的发送 |
 | accepted | SMTP 已接受，有真实接受时间，不代表最终投递或已读 |
 | failed | 明确失败或尚未调用 SMTP，例如认证错误、图片损坏、无权限 |
 | uncertain | SMTP 中断、任务取消或被占用后未完成，需要核验收件箱 |
 
 这是“最多一次 SMTP 尝试”，不是保证邮件一定成功投递的“恰好一次”。
-成功、失败和不确定请求都不能直接重跑再次发送。核验后确实需要新邮件时，由用户明确安排新请求。
+统一任务的发送成功、失败和不确定请求都不能直接重跑再次发送。重复规则只在已接受结果持久化后产生下一轮次。核验后确实需要新邮件时，由用户明确安排新请求。
 清理失败时结果仍保留，例如 `accepted` 不变、`cleanup` 为 `pending`。
 不要因清理失败重跑发送；可由管理员在草稿 Release 删除残留的 `mailbot-UUID` 附件。
 上传中断、未成功触发或运行在占用前被取消时可能留下草稿附件，也需按请求编号单独清理；不要删除请求记录。
@@ -149,7 +174,7 @@ python -m scripts.comic_mail --repo xurenqi/mail-bot status \
 3. 请求 ChatGPT 生成一张测试漫画，取得真实图片文件，写邮件描述，生成一个固定 UUID。
 4. 执行上传命令一次，等待对应的 `发送漫画邮件` 运行结束。
 5. 请求查询应为 `accepted`，有 `accepted_at`；检查邮箱附件能显示，正文含北京时间。
-6. `cleanup` 应为 `deleted`，草稿 Release 不再包含该请求的附件，代码仓库没有新图片提交。
+6. 单次任务的 `cleanup` 应为 `deleted`，草稿 Release 不再包含该请求的附件，代码仓库没有新图片提交。
 7. 复用同一 UUID再次调用上传命令应被拒绝，重新运行同一个 Actions 邮件任务也应拒绝再次调用 SMTP。
 8. 如状态为 `uncertain` 或结果保存未确认，先检查收件箱与运行摘要，不能自动重发。
 

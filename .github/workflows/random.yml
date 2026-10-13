@@ -18,31 +18,25 @@ run-name: ${{ github.event_name == 'schedule' && '定时检查' || github.event_
         - 循环随机发送
         - 关闭计划
         - 运行代码检查
+        - 指定时间发送
+        - 周期发送
+        - 取消任务
         default: 查看状态
-      min_interval:
-        description: 最短随机间隔（正整数）
-        type: number
-        default: 1
-      min_unit:
-        description: 最短间隔单位
-        type: choice
-        options:
-        - 分钟
-        - 小时
-        - 天
-        default: 分钟
-      max_interval:
-        description: 最长随机间隔（最大 90 天）
-        type: number
-        default: 90
-      max_unit:
-        description: 最长间隔单位
-        type: choice
-        options:
-        - 分钟
-        - 小时
-        - 天
-        default: 天
+      timing:
+        description: 目标时间：now、after:10m、带时区时间，或 random:5m:2d
+        type: string
+        default: ''
+        required: false
+      repeat_rule:
+        description: 重复规则：留空不重复；every:2h 或 random:5m:2d
+        type: string
+        default: ''
+        required: false
+      expires_at:
+        description: 最晚发送截止时间（可选，必须带时区；留空允许延迟补发一次）
+        type: string
+        default: ''
+        required: false
       custom_subject:
         description: 自定义主题（仅发送自定义邮件使用）
         type: string
@@ -53,13 +47,6 @@ run-name: ${{ github.event_name == 'schedule' && '定时检查' || github.event_
         type: string
         required: false
         default: ''
-      send_delay:
-        description: 发送时机
-        type: choice
-        options:
-        - 立即发送
-        - 3 分钟内随机发送
-        default: 立即发送
       image_path:
         description: 图片来源：images/photo.png；漫画可填 draft:图片文件名 或 asset:附件编号
         type: string
@@ -70,6 +57,11 @@ run-name: ${{ github.event_name == 'schedule' && '定时检查' || github.event_
         type: string
         required: false
         default: ''
+      task_id:
+        description: 取消单个任务时填写任务编号；关闭计划只关闭重复任务
+        type: string
+        default: ''
+        required: false
   schedule:
   - cron: '*/5 * * * *'
   - cron: 17 * * * *
@@ -97,217 +89,49 @@ jobs:
     if: github.event_name == 'push' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.action == '运行代码检查')
     permissions:
       contents: read
-  send-mail:
+  tasks:
+    name: 统一邮件任务
     if: (github.event.repository.private == true || (github.actor == github.repository_owner && github.triggering_actor == github.repository_owner)) &&
-      github.event_name == 'workflow_dispatch' && contains(fromJSON('["发送测试邮件","发送随机来信","发送小龙娘来信","发送自定义邮件"]'), inputs.action)
+      (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.action != '运行代码检查')) && (github.event_name != 'schedule' ||
+      (github.event.schedule == '*/5 * * * *' && vars.MAIL_BOT_POLL_MINUTES == '5') || (github.event.schedule == '17 * * * *' && vars.MAIL_BOT_POLL_MINUTES
+      != '5'))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    steps:
-    - name: Test
-      run: |
-        echo "GitHub Actions OK"
-        date '+北京时间 %Y-%m-%d %H:%M:%S %z'
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        persist-credentials: false
-    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-      with:
-        python-version: '3.12'
-    - name: Run offline tests
-      run: python -m unittest discover -s tests -v
-    - name: Wait before sending
-      env:
-        SEND_DELAY: ${{ inputs.send_delay || '立即发送' }}
-      run: python scripts/wait_before_send.py
-    - name: Reserve never-reused random letter
-      if: inputs.action == '发送随机来信' || inputs.action == '发送小龙娘来信'
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: python -m scripts.reserve_letter
-    - name: Send mail through QQ SMTP
-      env:
-        QQ_EMAIL: ${{ secrets.QQ_EMAIL }}
-        QQ_SMTP_AUTH_CODE: ${{ secrets.QQ_SMTP_AUTH_CODE }}
-        MAIL_TO: ${{ secrets.MAIL_TO }}
-        MESSAGE_TYPE: ${{ inputs.action == '发送测试邮件' && 'test' || inputs.action == '发送自定义邮件' && 'custom' || 'random' }}
-        IMAGE_PATH: ${{ inputs.image_path }}
-        LETTER_STYLE: ${{ inputs.action == '发送小龙娘来信' && 'dragon' || 'plain' }}
-        MAIL_FROM_NAME: 小龙娘
-      run: |
-        if [ "$LETTER_STYLE" = "dragon" ]; then
-          python scripts/send_letter.py
-        else
-          python scripts/send_mail.py
-        fi
     permissions:
       contents: write
+      actions: read
     concurrency:
-      group: mail-bot-manual-mail
-      cancel-in-progress: false
-  random-mail:
-    if: (github.event.repository.private == true || (github.actor == github.repository_owner && github.triggering_actor == github.repository_owner)) &&
-      ((github.event_name == 'workflow_dispatch' && contains(fromJSON('["查看状态","安排一次","循环随机发送","关闭计划"]'), inputs.action)) || (github.event_name == 'schedule'
-      && ((github.event.schedule == '*/5 * * * *' && vars.MAIL_BOT_POLL_MINUTES == '5') || (github.event.schedule == '17 * * * *' && vars.MAIL_BOT_POLL_MINUTES
-      != '5'))))
-    runs-on: ubuntu-24.04
-    timeout-minutes: 8
-    concurrency:
-      group: mail-bot-random-${{ github.event_name == 'schedule' && 'poll' || inputs.action == '查看状态' && 'status' || 'control' }}
+      group: mail-bot-tasks-${{ github.event_name == 'schedule' && 'poll' || inputs.action == '查看状态' && 'status' || 'control' }}
       cancel-in-progress: false
     steps:
-    - name: Record startup time and context
-      env:
-        EVENT_NAME: ${{ github.event_name }}
-        SCHEDULE_EXPR: ${{ github.event.schedule }}
-        RUN_ID: ${{ github.run_id }}
-        RUN_ATTEMPT: ${{ github.run_attempt }}
-        WORKFLOW_NAME: ${{ github.workflow }}
-        REPOSITORY: ${{ github.repository }}
-        SHA: ${{ github.sha }}
-      run: |
-        python - <<'PY'
-        import datetime
-        import json
-        import os
-        from pathlib import Path
-        utc = datetime.datetime.now(datetime.timezone.utc)
-        beijing = utc.astimezone(datetime.timezone(datetime.timedelta(hours=8)))
-        record = {
-            "started_at_utc": utc.isoformat(timespec="seconds"),
-            "started_at_beijing": beijing.isoformat(timespec="seconds"),
-            "event": os.environ["EVENT_NAME"],
-            "cron": os.environ.get("SCHEDULE_EXPR", ""),
-            "run_id": os.environ["RUN_ID"],
-            "attempt": os.environ["RUN_ATTEMPT"],
-            "workflow": os.environ["WORKFLOW_NAME"],
-            "repository": os.environ["REPOSITORY"],
-            "commit": os.environ["SHA"],
-        }
-        Path("startup-audit.json").write_text(
-            json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
-        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-            summary.write("### 后台启动记录\n\n")
-            for key, value in record.items():
-                summary.write(f"- **{key}**: `{value}`\n")
-        print(f"后台启动: 北京时间 {record['started_at_beijing']}, run={record['run_id']}, event={record['event']}")
-        PY
-    - name: Keep startup record for 14 days
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-      with:
-        name: startup-audit-${{ github.run_id }}-${{ github.run_attempt }}
-        path: startup-audit.json
-        retention-days: 14
-        if-no-files-found: error
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.12'
-    - name: Explain polling cadence
-      env:
-        FAST_POLL: ${{ vars.MAIL_BOT_POLL_MINUTES == '5' }}
-      run: |
-        if [ "$FAST_POLL" = 'true' ]; then
-          echo '启用每 5 分钟检查；GitHub 调度可能延迟，不保证目标时间准点发送。'
-        else
-          echo '默认每小时检查；短间隔会等到下一次检查才发送。'
-        fi
-    - name: Prepare persisted random plan
+    - name: 保存或管理统一任务
       id: prepare
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        ACTION: ${{ github.event_name == 'schedule' && 'poll' || inputs.action == '安排一次' && 'plan_once' || inputs.action == '循环随机发送' && 'plan_repeat' ||
-          inputs.action == '关闭计划' && 'disable' || 'status' }}
-        MIN_INTERVAL: ${{ inputs.min_interval }}
-        MIN_UNIT: ${{ inputs.min_unit == '分钟' && 'minutes' || inputs.min_unit == '小时' && 'hours' || 'days' }}
-        MAX_INTERVAL: ${{ inputs.max_interval }}
-        MAX_UNIT: ${{ inputs.max_unit == '分钟' && 'minutes' || inputs.max_unit == '小时' && 'hours' || 'days' }}
-      run: python -m scripts.random_scheduler prepare
-    - name: Reserve never-reused letter
-      if: steps.prepare.outputs.send_due == 'true'
+      run: python -m scripts.task_runner prepare
+    - name: Execute unified mail tasks via QQ SMTP
+      if: steps.prepare.outputs.execute == 'true'
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: python -m scripts.reserve_letter
-    - name: Send long personal letter through QQ SMTP
-      id: mail
-      if: steps.prepare.outputs.send_due == 'true'
-      env:
+        TASK_ID: ${{ steps.prepare.outputs.task_id }}
         QQ_EMAIL: ${{ secrets.QQ_EMAIL }}
         QQ_SMTP_AUTH_CODE: ${{ secrets.QQ_SMTP_AUTH_CODE }}
         MAIL_TO: ${{ secrets.MAIL_TO }}
-        MAIL_FROM_NAME: 小龙娘
-        IMAGE_PATH: ''
-        IMAGE_PATHS: ''
-      run: python scripts/send_letter.py
-    - name: Finalize persisted random plan
-      if: ${{ always() && steps.prepare.outputs.send_due == 'true' }}
+      run: python -m scripts.task_runner run
+    - name: 清理已结束任务附件（不改写发送结果）
+      if: ${{ always() && inputs.action != '查看状态' }}
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        MAIL_SEND_OUTCOME: ${{ steps.mail.outcome }}
-        SMTP_ACCEPTED_AT: ${{ steps.mail.outputs.accepted_at }}
-      run: python -m scripts.random_scheduler finalize
-    permissions:
-      contents: write
-      actions: write
-    env:
-      MAIL_BOT_UNIFIED: 'true'
-  status:
-    if: always() && !cancelled() && (github.event.repository.private == true || (github.actor == github.repository_owner && github.triggering_actor == github.repository_owner))
-      && github.event_name == 'workflow_dispatch' && inputs.action != '运行代码检查'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        persist-credentials: false
-    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-      with:
-        python-version: '3.12'
-    - name: Build status and history page
+      run: python -m scripts.task_runner cleanup
+    - name: 生成统一任务状态与历史
+      if: ${{ always() && github.event_name == 'workflow_dispatch' }}
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         CHECK_INTERVAL: ${{ vars.MAIL_BOT_POLL_MINUTES || '60' }}
       run: python -m scripts.status_history
-    needs:
-    - send-mail
-    - random-mail
-    - comic-mail
-    permissions:
-      contents: read
-      actions: read
-    concurrency:
-      group: mail-bot-status
-      cancel-in-progress: true
-  comic-mail:
-    name: 漫画邮件（上传请求）
-    if: github.event_name == 'workflow_dispatch' && inputs.action == '发送漫画邮件' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    concurrency:
-      group: mail-bot-comic-${{ inputs.request_id }}
-      cancel-in-progress: false
-    steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        persist-credentials: false
-    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-      with:
-        python-version: '3.12'
-    - name: Send comic mail through QQ SMTP
-      id: comic
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        QQ_EMAIL: ${{ secrets.QQ_EMAIL }}
-        QQ_SMTP_AUTH_CODE: ${{ secrets.QQ_SMTP_AUTH_CODE }}
-        MAIL_TO: ${{ secrets.MAIL_TO }}
-      run: python -m scripts.comic_mail receive
-    - name: 清理临时漫画附件（不影响发送记录）
-      if: ${{ always() && steps.comic.outputs.claimed == 'true' }}
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        COMIC_REQUEST_ID: ${{ steps.comic.outputs.request_id }}
-      run: python -m scripts.comic_mail cleanup

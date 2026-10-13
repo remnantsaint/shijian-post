@@ -19,7 +19,7 @@ import uuid
 import zlib
 
 from .github_api import GitHubAPI, GitHubAPIError
-from .random_scheduler import STATE_BRANCH, StateStore
+from .state_store import STATE_BRANCH, StateBranch
 from .time_utils import format_utc, utc_now
 from . import send_mail
 
@@ -235,7 +235,7 @@ def draft_release(api):
     return result["id"]
 
 
-def upload(api, image, subject, body, rid):
+def upload(api, image, subject, body, rid, *, timing='now', repeat='', expires=''):
     request_id(rid)
     content(subject, body)
     path = Path(image)
@@ -254,7 +254,7 @@ def upload(api, image, subject, body, rid):
     previous, _ = store.load(rid)
     if previous is not None:
         raise ComicError("请求编号已存在；已阻止再次上传或发送，请先查询结果")
-    StateStore(api).ensure_branch()
+    StateBranch(api).ensure_branch()
     sha256 = hashlib.sha256(data).hexdigest()
     record = {"version": 1, "id": rid, "status": "uploading", "created_at": format_utc(utc_now()),
               "image_sha256": sha256, "payload_sha256": digest_payload(subject, body, sha256),
@@ -279,19 +279,26 @@ def upload(api, image, subject, body, rid):
         except Exception:
             pass
         raise
-    dispatch(api, rid, subject, body)
+    dispatch(api, rid, subject, body, timing=timing, repeat=repeat, expires=expires)
     return rid
 
 
-def dispatch(api, rid, subject, body):
+def dispatch(api, rid, subject, body, *, timing='now', repeat='', expires=''):
+    from .task_queue import target_time, repeat_rule
+    target_time(timing);repeat_rule(repeat)
+    if expires:
+        from .time_utils import parse_utc
+        parse_utc(expires)
     repo = api.request("GET", f"/repos/{api.repo}")
     branch = repo.get("default_branch")
     if not isinstance(branch, str) or not branch:
         raise ComicError("无法确认默认分支；没有提交发送")
     # The tombstone precedes dispatch. A lost response cannot cause a resend.
+    payload={"action": ACTION, "request_id": rid,"custom_subject": subject,"custom_body": body,
+             "timing":timing,"repeat_rule":repeat}
+    if expires:payload['expires_at']=expires
     api.request("POST", f"/repos/{api.repo}/actions/workflows/{WORKFLOW}/dispatches", {
-        "ref": branch, "inputs": {"action": ACTION, "request_id": rid,
-                                    "custom_subject": subject, "custom_body": body}})
+        "ref": branch, "inputs":payload})
 
 
 def adopt(api, source, subject, body):
@@ -334,7 +341,7 @@ def adopt(api, source, subject, body):
     expected = {".png": "png", ".jpg": "jpg", ".jpeg": "jpg", ".webp": "webp"}
     if expected.get(Path(asset.get("name", "")).suffix.lower()) != extension or len(data) != asset["size"]:
         raise ComicError("草稿附件扩展名、类型或大小不一致")
-    StateStore(api).ensure_branch()
+    StateBranch(api).ensure_branch()
     image_sha = hashlib.sha256(data).hexdigest()
     record = {"version": 1, "id": rid, "status": "dispatching", "created_at": format_utc(utc_now()),
               "image_sha256": image_sha, "payload_sha256": digest_payload(subject, body, image_sha),
@@ -372,118 +379,46 @@ def output(name, value):
 
 
 def receive(api, *, sender=None, root=None):
+    """Compatibility entry; all delivery state lives in the common task ledger."""
     if os.environ.get("GITHUB_ACTIONS", "").lower() != "true":
-        raise ComicError("漫画接收入口仅供 Actions 调用；本地请使用 upload 或 status")
-    if not os.environ.get("COMIC_REQUEST_ID"):
-        with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as stream:
-            raw = stream.read(1024 * 1024 + 1)
-        if len(raw) > 1024 * 1024:
-            raise ComicError("触发参数超过大小限制")
-        inputs = json.loads(raw)["inputs"]
-        if inputs.get("action") != ACTION:
-            raise ComicError("漫画邮件操作无效")
-        if not inputs.get("request_id"):
-            rid = adopt(api, inputs.get("image_path", ""), inputs.get("custom_subject", ""),
-                        inputs.get("custom_body", ""))
-            os.environ["COMIC_REQUEST_ID"] = rid
-    rid, subject, body = event_inputs()
-    output("request_id", rid)
-    store = Requests(api)
-    record, sha = store.load(rid)
-    if record is None or record["status"] != "dispatching":
-        raise ComicError("请求不存在或已经处理；为防止重复发送，拒绝重跑")
-    if digest_payload(subject, body, record["image_sha256"]) != record["payload_sha256"]:
-        raise ComicError("触发内容与上传请求不一致；已阻止发送")
-    record.update(status="claimed", run_id=os.environ.get("GITHUB_RUN_ID", ""),
-                  run_attempt=os.environ.get("GITHUB_RUN_ATTEMPT", "1"))
-    if not str(record["run_id"]).isdigit() or not str(record["run_attempt"]).isdigit():
-        raise ComicError("缺少有效 Actions 运行编号；已阻止发送")
-    sha = store.save(record, sha)  # Exactly one CAS winner can call SMTP.
-    output("claimed", "true")
-    destination = None
-    result = None
-    smtp_started = False
-    status, explanation = "failed", "图片准备失败，未调用 SMTP。"
+        raise ComicError("漫画接收入口仅供 Actions 调用；本地请使用 upload 或 register")
+    from .task_runner import prepare, run, deliver, inputs
+    from .task_queue import TaskStore, TaskError
+    previous_root=send_mail.REPOSITORY_ROOT
+    if root is not None:send_mail.REPOSITORY_ROOT=Path(root).resolve()
     try:
-        release = api.request("GET", f"/repos/{api.repo}/releases/{record['release_id']}")
-        if release.get("draft") is not True or release.get("tag_name") != RELEASE_TAG:
-            raise ComicError("临时图片存储已被发布或变更；已阻止发送")
-        assets = api.request("GET", f"/repos/{api.repo}/releases/{record['release_id']}/assets?per_page=100")
-        asset = next((item for item in assets if item.get("id") == record["asset_id"]), None)
-        ext = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}[record["mime"]]
-        if (not asset or asset.get("name") != f"mailbot-{rid}.{ext}"
-                or asset.get("size") != record["size"] or asset.get("state") != "uploaded"):
-            raise ComicError("附件身份或大小与请求不一致；已阻止发送")
-        data = api.download_release_asset(record["asset_id"], MAX_BYTES)
-        if hashlib.sha256(data).hexdigest() != record["image_sha256"] or image_type(data)[1] != record["mime"]:
-            raise ComicError("附件内容校验失败；已阻止发送")
-        repository = Path(root or send_mail.REPOSITORY_ROOT).resolve()
-        images = repository / "images"
-        if images.is_symlink() or not images.is_dir():
-            raise ComicError("附件临时目录无效；已阻止发送")
-        temporary = images / ".mail-bot-tmp"
-        if temporary.is_symlink():
-            raise ComicError("附件临时目录不能是符号链接")
-        temporary.mkdir(mode=0o700, exist_ok=True)
-        destination = temporary / str(uuid.uuid4())
-        destination.mkdir(mode=0o700)
-        image = destination / f"attachment.{ext}"
-        with image.open("xb") as stream:
-            stream.write(data)
-        os.environ.update(MESSAGE_TYPE="custom", IMAGE_PATH=str(image.relative_to(repository)))
-        smtp_started = True
-        result = (sender or send_mail.send)()
-        status, explanation = "accepted", "QQ SMTP 已接受漫画邮件；不等于最终投递。"
-        record["accepted_at"] = result["accepted_at"]
-        send_mail.write_accepted_output(result["accepted_at"])
-    except Exception as exc:
-        if smtp_started:
-            status, explanation = send_mail.failure_details(exc)
-        else:
-            status, explanation = "failed", "附件准备或权限检查失败，未调用 SMTP；检查上传记录和权限。"
-    finally:
-        if destination is not None:
+        raw_id=inputs().get('request_id') or os.environ.get('COMIC_REQUEST_ID')
+        existing=TaskStore(api).get(raw_id) if raw_id else None
+        if existing and existing['status'] not in {'blocked'}:
+            raise ComicError('任务已经登记或处理，禁止重跑；请查询原任务。')
+        try:selected=prepare(api)
+        except Exception as exc:
             try:
-                shutil.rmtree(destination)
-            except OSError:
-                print("运行器临时图片清理失败；未改变发送结果。", file=sys.stderr)
-    record.update(status=status, finished_at=format_utc(utc_now()))
-    try:
-        store.save(record, sha)
-    except Exception:
-        explanation += " 持久结果保存未获确认，禁止重跑；先核验运行摘要和收件箱。"
-        send_mail.append_send_summary(status, result if status == "accepted" else None, explanation)
-        print(explanation, file=sys.stderr)
-        return 1
-    send_mail.append_send_summary(status, result if status == "accepted" else None, explanation)
-    print(explanation)
-    return 0 if status == "accepted" else 1
+                rid=inputs().get('request_id') or os.environ.get('COMIC_REQUEST_ID')
+                task=TaskStore(api).get(rid)
+            except Exception:task=None
+            if task and task['status']=='failed':return 1
+            if isinstance(exc,TaskError):raise ComicError(str(exc)) from None
+            raise
+        if not selected:return 0
+        os.environ['COMIC_REQUEST_ID']=selected
+        return run(api,selected,sender=lambda task:deliver(api,task,smtp_sender=sender))
+    finally:send_mail.REPOSITORY_ROOT=previous_root
 
 
 def cleanup(api):
-    """Best effort after a successful claim; never overwrites SMTP acceptance."""
+    """Compatibility wrapper, not a second delivery state machine."""
+    from .task_runner import cleanup as clean_tasks
+    from .migrate_tasks import migrate
     try:
-        rid, _, _ = event_inputs()
-        store = Requests(api)
-        record, sha = store.load(rid)
-        if (record is None or record.get("run_id") != os.environ.get("GITHUB_RUN_ID")
-                or record.get("run_attempt") != os.environ.get("GITHUB_RUN_ATTEMPT", "1")):
-            return
-        if record["status"] == "claimed":
-            record.update(status="uncertain", finished_at=format_utc(utc_now()))
-            sha = store.save(record, sha)
-        if record["status"] not in {"accepted", "failed", "uncertain"}:
-            return
-        try:
-            api.request("DELETE", f"/repos/{api.repo}/releases/assets/{record['asset_id']}")
-        except GitHubAPIError as exc:
-            if exc.status != 404:
-                raise
-        record["cleanup"] = "deleted"
-        store.save(record, sha)
-        print("临时草稿附件已删除；发送记录保留。")
+        rid,_,_=event_inputs()
+        old,_=Requests(api).load(rid)
+        if old and old.get('run_id') and (old['run_id']!=os.environ.get('GITHUB_RUN_ID')
+                or str(old.get('run_attempt',1))!=os.environ.get('GITHUB_RUN_ATTEMPT','1')):return
+        migrate(api)
+        clean_tasks(api)
     except Exception:
-        print("临时附件清理未完成；发送结果保留，禁止仅因清理失败再次发送。", file=sys.stderr)
+        print("附件清理未完成；结果保留，不能因此重发。",file=sys.stderr)
 
 
 class Parser(argparse.ArgumentParser):
@@ -503,6 +438,10 @@ def main(argv=None):
         registrar = commands.add_parser("register", help="登记手机/浏览器已上传的草稿附件并触发发送")
         registrar.add_argument("--asset", required=True, help="draft:文件名 或 asset:编号")
         registrar.add_argument("--message-file", required=True)
+        for command in (uploader,registrar):
+            command.add_argument('--at',default='now',help='now、after:2m、带时区时间或 random:5m:2d')
+            command.add_argument('--repeat',default='',help='留空、every:2h 或 random:5m:2d')
+            command.add_argument('--expires',default='',help='可选截止时间，必须带时区')
         inspect = commands.add_parser("status")
         inspect.add_argument("--request-id", required=True)
         commands.add_parser("receive")
@@ -515,6 +454,11 @@ def main(argv=None):
             raise ComicError("缺少安全绑定的 GitHub 身份；不要将令牌发送到聊天")
         api = GitHubAPI(args.repo, token)
         if args.command in {"upload", "register"}:
+            from .task_queue import target_time,repeat_rule
+            target_time(args.at);repeat_rule(args.repeat)
+            if args.expires:
+                from .time_utils import parse_utc
+                parse_utc(args.expires)
             with open(args.message_file, encoding="utf-8") as stream:
                 text = stream.read(128 * 1024 + 1)
             if len(text) > 128 * 1024:
@@ -523,12 +467,18 @@ def main(argv=None):
             if not isinstance(message, dict) or set(message) != {"subject", "body"}:
                 raise ComicError("邮件描述文件仅允许 subject 和 body 两个字段")
             if args.command == "upload":
-                upload(api, args.image, message["subject"], message["body"], args.request_id)
+                upload(api, args.image, message["subject"], message["body"], args.request_id,
+                       timing=args.at,repeat=args.repeat,expires=args.expires)
             else:
                 rid = adopt(api, args.asset, message["subject"], message["body"])
-                dispatch(api, rid, message["subject"], message["body"])
+                dispatch(api, rid, message["subject"], message["body"],timing=args.at,repeat=args.repeat,expires=args.expires)
             print("上传与发送请求已提交；尚未确认 SMTP 接受或最终投递。禁止重复提交同一请求。")
         elif args.command == "status":
+            from .task_queue import TaskStore
+            task = TaskStore(api).get(request_id(args.request_id))
+            if task is not None:
+                print(json.dumps({key: task.get(key) for key in ("id","status","target_at","repeat","last_result","accepted_at","cleanup")},ensure_ascii=False))
+                return 0
             record, _ = Requests(api).load(request_id(args.request_id))
             if record is None:
                 print("请求不存在。")

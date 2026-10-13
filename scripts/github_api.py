@@ -63,8 +63,8 @@ class GitHubAPI:
 
     def upload_release_asset(self, release_id, name, mime, data):
         if (type(release_id) is not int or release_id < 1
-                or not re.fullmatch(r"mailbot-[0-9a-f-]{36}\.(png|jpg|webp)", name)
-                or mime not in {"image/png", "image/jpeg", "image/webp"}
+                or not re.fullmatch(r"mailbot-(?:task-)?[0-9a-f-]{36}\.(png|jpg|webp|gif|json)", name)
+                or mime not in {"image/png", "image/jpeg", "image/webp", "image/gif", "application/json"}
                 or not isinstance(data, bytes) or not 0 < len(data) <= 5 * 1024 * 1024):
             raise GitHubAPIError("图片上传参数无效")
         url = (f"https://uploads.github.com/repos/{self.repo}/releases/{release_id}/assets?"

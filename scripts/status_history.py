@@ -12,7 +12,8 @@ from pathlib import Path
 
 from .github_api import GitHubAPI, GitHubAPIError
 from .time_utils import UTC, format_beijing, format_utc, parse_utc, utc_now
-from .random_scheduler import UNIFIED_WORKFLOW_NAME
+from .legacy_plan import UNIFIED_WORKFLOW_NAME
+from .task_queue import TaskStore
 
 
 SEND_STEP = "Send mail through QQ SMTP"
@@ -21,6 +22,7 @@ SEND_STEPS = frozenset({SEND_STEP, "Send long personal letter through QQ SMTP",
 LETTER_WORKFLOW = "dragon-letter.yml"
 LETTER_LABEL = "小龙娘来信"
 WAIT_STEP = "Wait before sending"
+TASK_STEP = "Execute unified mail tasks via QQ SMTP"
 STATES = {"active": "启用", "disabled_manually": "手动停用",
           "disabled_inactivity": "因长期无活动停用", "deleted": "已删除"}
 
@@ -71,6 +73,8 @@ def step_result(run, jobs):
         return "状态未知（步骤查询失败）"
     steps = [step for job in jobs for step in job.get("steps", [])]
     send_steps = [step for step in steps if step.get("name") in SEND_STEPS]
+    if any(step.get('name')==TASK_STEP for step in steps):
+        return '统一任务执行；以任务账本的结果为准'
     if any(step.get("conclusion") == "success" for step in send_steps):
         return "SMTP 已接受"
     if any(step.get("status") == "in_progress" for step in send_steps):
@@ -143,7 +147,7 @@ def read_workflow_runs(api, repo, filename, label, optional=False, send_only=Fal
         # Unified status/CI/control runs are never interpreted as mail attempts.
         runs = [run for run in runs if run.get("event") == "workflow_dispatch"
                 and run.get("display_title") in {"发送测试邮件", "发送随机来信",
-                                                   "发送小龙娘来信", "发送自定义邮件", "发送漫画邮件"}]
+                                                   "发送小龙娘来信", "发送自定义邮件", "发送漫画邮件", "指定时间发送", "周期发送"}]
     entries = []
     recent_runs = sorted(runs[:20], key=lambda run: timestamp(
         run.get("updated_at") or run.get("created_at")), reverse=True)
@@ -314,9 +318,45 @@ def make_report(api, repo, now=None, check_interval="60"):
                          f"[查看运行]({run_url(repo, latest['run_id'], latest['run_attempt'])})。")
         else:
             lines.append(f"{LETTER_LABEL}尚无运行记录。")
-    lines.extend(random_description(repo, random_workflow, state, query_completed,
-                                    None if check_interval is None else
-                                    5 if check_interval == "5" else 60))
+    queue=TaskStore(api).load()[0]
+    for entry in manual:
+        proofs=[proof for task in queue['tasks'].values() for proof in task.get('history',[])
+                if str(proof['run_id'])==str(entry['run_id'])
+                and int(proof.get('attempt',proof.get('run_attempt',1)))==entry['run_attempt']]
+        if proofs:
+            proof=max(proofs,key=lambda item:item['occurred_at'])
+            entry.update(result={'accepted':'SMTP 已接受','failed':'明确失败或未发送','uncertain':'结果不确定，禁止重发','expired':'超过截止时间，未发送'}.get(proof['status'],'未知'),
+                         date=timestamp(proof['occurred_at']),time_source='SMTP 接受' if proof.get('time_source')=='smtp_accepted' else '结果记录')
+        else:
+            matching=[task for task in queue['tasks'].values() if task.get('origin',{}).get('run_id')==str(entry['run_id'])]
+            if matching:entry['result']='未确认 SMTP；任务状态：'+', '.join(sorted({task['status'] for task in matching}))
+    if queue.get('legacy_migrated') or queue['tasks']:
+        labels={'queued':'等待目标时间','sending':'处理中','accepted':'SMTP 已接受','failed':'失败或未发送',
+                'uncertain':'结果不确定，禁止重发','cancelled':'已取消','expired':'超过截止时间，未发送',
+                'staging':'内容准备中','blocked':'需人工核验内容'}
+        lines += ['', '## 统一任务', '',
+                  '目标时间是期望执行时间；Actions 排队或 cron 延迟不会自动重发。已错过目标但没有截止时间的任务只补发一次。',
+                  '| 任务编号 | 状态 | 目标北京时间 | 实际 SMTP 接受时间 | 重复规则 |',
+                  '| --- | --- | --- | --- | --- |']
+        for task in sorted(queue['tasks'].values(),key=lambda task:task['created_at'],reverse=True)[:30]:
+            due=beijing(timestamp(task['target_at'])) if task.get('target_at') else '原计划无目标时间'
+            accepted=beijing(timestamp(task['accepted_at'])) if task.get('accepted_at') else '未确认'
+            rule=task.get('repeat')
+            repeat=('无' if not rule else f"每 {rule['seconds']} 秒" if rule['kind']=='fixed'
+                    else f"随机 {rule['min_seconds']}–{rule['max_seconds']} 秒")
+            lines.append('| '+' | '.join(markdown(value) for value in (task['id'],labels[task['status']],due,accepted,repeat))+' |')
+            for entry in task.get('history',[]):
+                random_history.append({'run_id':positive_id(entry['run_id']),
+                    'run_attempt':positive_id(entry.get('attempt',entry.get('run_attempt',1))),
+                    'date':timestamp(entry['occurred_at']),'time_source':'SMTP 接受' if entry.get('time_source')=='smtp_accepted' else '结果记录',
+                    'kind':'统一任务','workflow':UNIFIED_WORKFLOW_NAME,
+                    'result':labels.get(entry['status'],'未知')})
+        if not queue['tasks']:lines.append('| — | 尚无任务 | — | — | — |')
+        lines.append('旧随机计划和图片请求已迁移；源文件仅作历史快照，不再驱动发送。')
+    else:
+        lines.extend(random_description(repo, random_workflow, state, query_completed,
+                                        None if check_interval is None else
+                                        5 if check_interval == "5" else 60))
     unique = {}
     for entry in manual + letters + random_history:
         key = (entry['run_id'], entry['run_attempt'])

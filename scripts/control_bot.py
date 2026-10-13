@@ -10,9 +10,8 @@ import re
 import sys
 
 from scripts.github_api import GitHubAPI, GitHubAPIError
-from scripts.random_scheduler import (
-    SchedulerError, StateStore, closed_plan_state, interval_minutes, validate_bounds, UNIFIED_WORKFLOW_NAME,
-)
+from scripts.task_queue import Tasks, TaskStore, TaskError, duration, repeat_rule, target_time
+from scripts.task_runner import UNIFIED_WORKFLOW_NAME
 from scripts.status_history import ReportError, make_report
 
 
@@ -96,97 +95,56 @@ class Controller:
         self.output(make_report(self.api, self.repo, check_interval=interval))
 
     def send(self, message_type="random", delay="immediate", image="", *, subject="", body=""):
-        if message_type not in ("test", "random", "custom") or delay not in DELAYS:
-            raise ControlError("邮件类型或发送时机无效；未提交发送。")
-        if message_type == "custom":
-            if (not isinstance(body, str) or not body.strip() or len(body) > 100_000
-                    or "\x00" in body):
-                raise ControlError("自定义正文必须非空且不超过 100000 字符，不能包含空字符；未提交发送。")
-            if (not isinstance(subject, str) or len(subject) > 200
-                    or any(ord(char) < 32 or ord(char) == 127 for char in subject)):
-                raise ControlError("自定义主题必须是长度合适的单行文本；未提交发送。")
-        elif subject or body:
-            raise ControlError("自定义主题和正文仅用于 custom 邮件；未提交发送。")
-        path = image_path(image)
-        branch = self.default_branch()
-        inputs = {
-            "message_type": message_type,
-            "send_delay": DELAYS[delay],
-            "image_path": path,
-        }
-        if message_type == "custom":
-            inputs.update(custom_subject=subject, custom_body=body)
-        workflow = self.api.request("GET", f"{self.prefix}/actions/workflows/{PLAN_WORKFLOW}")
-        if isinstance(workflow, dict) and workflow.get("name") == UNIFIED_WORKFLOW_NAME:
-            inputs.pop("message_type")
-            inputs["action"] = {"test": "发送测试邮件", "random": "发送随机来信",
-                                "custom": "发送自定义邮件"}[message_type]
-            self.dispatch(PLAN_WORKFLOW, branch, inputs)
-        else:
-            self.dispatch(SEND_WORKFLOW, branch, inputs)
-        self.output("发送请求已提交；工作流尚未确认完成，不能据此确认 SMTP 接受或邮件投递。请查看 status 和收件箱；未自动重试。")
+        if delay not in DELAYS:
+            raise ControlError("发送时机无效；未提交任务。")
+        timing="now" if delay=="immediate" else "random:1s:180s"
+        return self.schedule(message_type, timing, image=image, subject=subject, body=body)
+
+    def schedule(self, message_type="random", timing="now", repeat="", *, image="", subject="", body="", expires="", rid=""):
+        actions={"test":"发送测试邮件","random":"发送随机来信","custom":"发送自定义邮件"}
+        if message_type not in actions:raise ControlError("邮件类型无效；未提交任务。")
+        target_time(timing);repeat_rule(repeat)
+        if expires:
+            from scripts.time_utils import parse_utc
+            parse_utc(expires)
+        if message_type=="custom":
+            if not isinstance(body,str) or not body.strip() or len(body)>100000 or "\0" in body:
+                raise ControlError("自定义正文必须非空且不超过 100000 字符；未提交任务。")
+            if not isinstance(subject,str) or len(subject)>200 or any(not c.isprintable() for c in subject):
+                raise ControlError("主题必须是合适的单行文本；未提交任务。")
+        elif subject or body:raise ControlError("自定义主题和正文仅用于 custom 邮件。")
+        payload={"action":actions[message_type],"timing":timing,"repeat_rule":repeat,"image_path":image_path(image)}
+        if message_type=="custom":payload.update(custom_subject=subject,custom_body=body)
+        if expires:payload["expires_at"]=expires
+        if rid:
+            from scripts.task_queue import task_id
+            payload["request_id"]=task_id(rid)
+        self.dispatch(PLAN_WORKFLOW,self.default_branch(),payload)
+        self.output("统一任务请求已提交；请查询目标时间和状态，尚未确认 SMTP 接受或最终投递。没有自动重试。")
 
     def plan(self, mode, min_interval, min_unit, max_interval, max_unit):
-        if mode not in MODES:
-            raise ControlError("计划模式无效；未提交计划。")
-        lower = interval_minutes(min_interval, min_unit)
-        upper = interval_minutes(max_interval, max_unit)
-        validate_bounds(lower, upper)
-        # Validate every input before enabling or dispatching any workflow.
-        state = StateStore(self.api).load()
-        workflow = self.api.request("GET", f"{self.prefix}/actions/workflows/{PLAN_WORKFLOW}")
-        workflow_state = workflow.get("state") if isinstance(workflow, dict) else None
-        if not isinstance(workflow_state, str) or not workflow_state:
-            raise ControlError("无法确认随机计划工作流状态；未启用或提交计划。")
-        if state is not None and state["state"] == "sending":
-            raise ControlError("上次发送结果尚未确认；请先核对历史和收件箱并关闭旧计划，未启用或提交新计划。")
-        if state is not None and state["enabled"] and workflow_state != "active":
-            raise ControlError("旧计划仍标记启用，但工作流已停用；请先关闭旧计划，防止恢复旧目标时间。未启用或提交新计划。")
-        branch = self.default_branch()
-        if workflow_state != "active":
+        if mode not in MODES:raise ControlError("计划模式无效；未提交任务。")
+        units={"minutes":"m","hours":"h","days":"d"}
+        if min_unit not in units or max_unit not in units:raise ControlError("时间单位无效。")
+        timing=f"random:{min_interval}{units[min_unit]}:{max_interval}{units[max_unit]}"
+        repeat_rule(timing)
+        workflow=self.api.request("GET",f"{self.prefix}/actions/workflows/{PLAN_WORKFLOW}")
+        if workflow.get("state")!="active":
+            if any(task['status'] in {'queued','sending'} for task in TaskStore(self.api).load()[0]['tasks'].values()):
+                raise ControlError("停用入口仍有未完成任务；先核验或取消，避免意外恢复旧任务。")
             self.enable_plan_workflow()
-        self.dispatch(PLAN_WORKFLOW, branch, {
-            "action": MODES[mode],
-            "min_interval": str(min_interval), "min_unit": UNITS[min_unit],
-            "max_interval": str(max_interval), "max_unit": UNITS[max_unit],
-        })
-        self.output("随机计划请求已提交；请查看 status 确认计划已保存和下次目标时间。本次提交不等于发送，GitHub 定时检查可能延迟；未自动重试。")
+        self.dispatch(PLAN_WORKFLOW,self.default_branch(),{'action':MODES[mode],
+                      'timing':timing,'repeat_rule':timing if mode=='repeat' else ''})
+        self.output('统一随机时间任务已提交；尚未确认目标时间已保存或邮件投递。')
 
     def pause(self):
-        store = StateStore(self.api)
-        state = store.load()
-        actual_plan = state is not None and (
-            state["enabled"] or state["state"] in {"scheduled", "sending", "paused"}
-        )
-        # Stop future polls before changing state; never enable a stale plan merely
-        # to dispatch its closure. The SHA guards concurrent claims/finalization.
-        workflow = self.api.request("GET", f"{self.prefix}/actions/workflows/{PLAN_WORKFLOW}")
-        workflow_state = workflow.get("state") if isinstance(workflow, dict) else None
-        unified = isinstance(workflow, dict) and workflow.get("name") == UNIFIED_WORKFLOW_NAME
-        if unified:
-            if workflow_state not in {"active", "disabled_manually", "disabled_inactivity"}:
-                raise ControlError("无法确认统一入口状态；未修改计划，请查看 status。")
-            if actual_plan:
-                try:
-                    store.save(closed_plan_state(state), "Disable random mail plan from assistant")
-                except GitHubAPIError:
-                    raise ControlError("计划关闭状态未获确认；未停用统一入口或自动重试，请查看 status 和收件箱。") from None
-            self.output("随机计划已关闭，历史保留；统一入口仍可手动发送和查询。已开始的邮件仍可能发出，请核对收件箱。")
-            return
-        if workflow_state == "active":
-            self.api.request("PUT", f"{self.prefix}/actions/workflows/{PLAN_WORKFLOW}/disable")
-        elif workflow_state not in {"disabled_manually", "disabled_inactivity"}:
-            raise ControlError("无法确认随机工作流已停用；未修改计划状态，请核验工作流状态和权限。")
-        if actual_plan:
-            try:
-                store.save(closed_plan_state(state), "Disable random mail plan from assistant")
-            except GitHubAPIError as exc:
-                if exc.status == 409:
-                    raise ControlError("随机工作流已停用，但计划被并发更新，关闭状态未保存；未覆盖新状态或自动重试，请查看 status 和收件箱。已开始的邮件仍可能成功。") from None
-                raise ControlError("随机工作流已停用，但持久化关闭状态未获确认；未自动重试，请检查写入权限、网络、status 和收件箱。已开始的邮件仍可能成功。") from None
-            self.output("随机计划已关闭并保存，工作流已停用，历史保留。没有提交发送或重试；正在执行的邮件仍可能已被 SMTP 接受，请核对状态和收件箱。")
-        else:
-            self.output("随机计划工作流已停用；没有提交发送请求，现有持久化历史保留。已开始的运行仍需单独核查。")
+        count=Tasks(TaskStore(self.api)).cancel(repeating_only=True)
+        self.output(f"已关闭 {count} 个重复任务，历史保留；一次性任务可按编号取消，统一入口没有停用。")
+
+    def cancel_task(self, rid):
+        from scripts.task_queue import task_id
+        count=Tasks(TaskStore(self.api)).cancel(task_id(rid))
+        self.output(f"已取消 {count} 个任务；正在发送的邮件可能已被接受，不能撤回。")
 
     def cancel_run(self, run_id):
         run_id = positive_run_id(run_id)
@@ -260,7 +218,18 @@ def build_parser():
     plan.add_argument("--min-unit", choices=tuple(UNITS), required=True)
     plan.add_argument("--max", dest="max_interval", required=True)
     plan.add_argument("--max-unit", choices=tuple(UNITS), required=True)
-    commands.add_parser("pause", help="保留历史并关闭随机计划")
+    schedule = commands.add_parser("schedule", help="统一任务：立即、指定、随机或重复发送")
+    schedule.add_argument("--type", dest="message_type", choices=("test","random","custom"), default="random")
+    schedule.add_argument("--at", default="now")
+    schedule.add_argument("--repeat", default="")
+    schedule.add_argument("--expires", default="")
+    schedule.add_argument("--request-id", default="")
+    schedule.add_argument("--image", default="")
+    schedule.add_argument("--subject", default="")
+    schedule.add_argument("--body", default="")
+    cancellation = commands.add_parser("cancel-task", help="按编号取消任务，不撤回已发送邮件")
+    cancellation.add_argument("--task-id", required=True)
+    commands.add_parser("pause", help="关闭重复任务并保留统一入口")
     cancel = commands.add_parser("cancel-run", help="取消指定邮件工作流运行，不重跑")
     cancel.add_argument("--run-id", required=True)
     return parser
@@ -284,11 +253,16 @@ def main(argv=None):
         elif command == "plan":
             controller.plan(args.mode, args.min_interval, args.min_unit,
                             args.max_interval, args.max_unit)
+        elif command == "schedule":
+            controller.schedule(args.message_type,args.at,args.repeat,image=args.image,
+                                subject=args.subject,body=args.body,expires=args.expires,rid=args.request_id)
+        elif command == "cancel-task":
+            controller.cancel_task(args.task_id)
         elif command == "pause":
             controller.pause()
         elif command == "cancel-run":
             controller.cancel_run(args.run_id)
-    except (ControlError, SchedulerError, ReportError) as exc:
+    except (ControlError, TaskError, ReportError, ValueError) as exc:
         print(f"控制操作未完成：{exc}", file=sys.stderr)
         return 1
     except GitHubAPIError as exc:

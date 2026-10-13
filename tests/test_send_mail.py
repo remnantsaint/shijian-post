@@ -17,6 +17,15 @@ from scripts import send_mail
 
 
 class MailTests(unittest.TestCase):
+    @patch('scripts.send_mail.smtplib.SMTP_SSL')
+    def test_deadline_crossed_during_login_never_submits_data(self,smtp):
+        from scripts.time_utils import DeadlineExpired
+        start=datetime(2026,10,20,12,0,tzinfo=timezone.utc)
+        with patch.dict(os.environ,{'MAIL_DEADLINE':(start+timedelta(seconds=10)).isoformat()}), \
+                patch('scripts.send_mail.utc_now',side_effect=[start,start+timedelta(seconds=20)]):
+            with self.assertRaises(DeadlineExpired):send_mail.send()
+        smtp.return_value.send_message.assert_not_called()
+        smtp.return_value.quit.assert_called_once()
     def setUp(self):
         self.env = patch.dict(os.environ, {
             "QQ_EMAIL": "sender@qq.com", "MAIL_TO": "recipient@example.com",

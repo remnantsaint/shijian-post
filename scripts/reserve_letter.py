@@ -18,7 +18,7 @@ from functools import lru_cache
 
 from scripts.github_api import GitHubAPI, GitHubAPIError
 from scripts.dragon_letters import OPENINGS, SCENES, THOUGHTS, EXTRAS, CLOSINGS, TITLES
-from scripts.random_scheduler import StateStore
+from scripts.state_store import StateBranch
 
 BRANCH = "mail-bot-state"
 PATH = ".mail-bot/used-letters.json"
@@ -197,7 +197,7 @@ def reserve(api, *, choose=None, max_attempts=MAX_ATTEMPTS):
         raise ReservationError("预留重试次数配置无效；已阻止发送。")
     catalog = candidates()
     choose = choose or random.SystemRandom().choice
-    StateStore(api).ensure_branch()
+    StateBranch(api).ensure_branch()
     ledger, sha = load_ledger(api)
     endpoint = f"/repos/{api.repo}/contents/{PATH}"
     for attempt in range(max_attempts):

@@ -116,7 +116,9 @@ class ComicTests(unittest.TestCase):
         self.image = self.root / 'comic.png'
         self.image.write_bytes(png())
         self.rid = str(uuid.uuid4())
-        self.api = FakeAPI()
+        from test_task_queue import TaskAPI
+        self.new_api=TaskAPI
+        self.api = TaskAPI()
         self.event = self.root / 'event.json'
         self.event.write_text(json.dumps({'inputs': {'action': comic.ACTION, 'request_id': self.rid,
                                                     'custom_subject': '漫画来信', 'custom_body': '小澪的中文漫画正文。'}}))
@@ -124,6 +126,7 @@ class ComicTests(unittest.TestCase):
         self.env = patch.dict(os.environ, {
             'GITHUB_EVENT_PATH': str(self.event), 'GITHUB_ACTIONS': 'true',
             'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1',
+            'GITHUB_ACTOR':'owner','GITHUB_TRIGGERING_ACTOR':'owner','GITHUB_REPOSITORY_OWNER':'owner',
             'GITHUB_STEP_SUMMARY': str(self.summary), 'GITHUB_OUTPUT': str(self.root / 'output'),
             'QQ_EMAIL': 'sender@qq.com', 'MAIL_TO': 'receiver@example.com',
             'QQ_SMTP_AUTH_CODE': 'private-test-code',
@@ -141,7 +144,8 @@ class ComicTests(unittest.TestCase):
         return comic.upload(self.api, self.image, '漫画来信', '小澪的中文漫画正文。', self.rid)
 
     def record(self):
-        return self.api.records[self.rid][0]
+        from scripts.task_queue import TaskStore
+        return TaskStore(self.api).get(self.rid) or self.api.records[self.rid][0]
 
     def manual_asset(self):
         data=png()
@@ -160,7 +164,7 @@ class ComicTests(unittest.TestCase):
             self.assertEqual(comic.receive(self.api,root=self.root),0)
         self.assertEqual(self.record()['status'],'accepted')
         self.assertEqual(list(smtp.return_value.send_message.call_args.args[0].iter_attachments())[0].get_payload(decode=True),png())
-        self.assertFalse(any(method=='UPLOAD' for method,_,_ in self.api.calls))
+        self.assertTrue(all(name.endswith('.json') for method,name,_ in self.api.calls if method=='UPLOAD'))
         comic.cleanup(self.api)
         self.assertEqual(self.record()['cleanup'],'deleted')
         with self.assertRaises(comic.ComicError):comic.receive(self.api,root=self.root)
@@ -266,11 +270,11 @@ class ComicTests(unittest.TestCase):
         with self.assertRaises(comic.ComicError):
             comic.receive(self.api, sender=sender, root=self.root)
         sender.assert_not_called()
-        self.assertEqual(self.record()['status'], 'dispatching')
+        self.assertEqual(self.api.records[self.rid][0]['status'], 'dispatching')
 
     def test_bad_download_and_published_storage_fail_before_smtp(self):
         for cause in ('tamper','published'):
-            self.api = FakeAPI(); self.rid = str(uuid.uuid4())
+            self.api = self.new_api(); self.rid = str(uuid.uuid4())
             event = json.loads(self.event.read_text()); event['inputs']['request_id'] = self.rid
             self.event.write_text(json.dumps(event)); self.upload()
             if cause == 'tamper': self.api.tamper = True
@@ -284,9 +288,9 @@ class ComicTests(unittest.TestCase):
         self.upload()
         original = self.api.request
         def request(method,path,data=None):
-            if method == 'PUT' and '/image-requests/' in path:
+            if method == 'PUT' and '/tasks.json' in path:
                 record = json.loads(base64.b64decode(data['content']))
-                if record['status'] == 'claimed':
+                if any(task['status'] == 'sending' for task in record['tasks'].values()):
                     raise GitHubAPIError('conflict private', status=409)
             return original(method,path,data)
         sender = unittest.mock.Mock()
@@ -297,7 +301,7 @@ class ComicTests(unittest.TestCase):
     def test_smtp_outcomes_no_automatic_retry(self):
         for error, expected in ((smtplib.SMTPAuthenticationError(535,b'private-test-code'),'failed'),
                                 (smtplib.SMTPServerDisconnected('private-test-code'),'uncertain')):
-            self.api = FakeAPI(); self.rid = str(uuid.uuid4())
+            self.api = self.new_api(); self.rid = str(uuid.uuid4())
             event = json.loads(self.event.read_text()); event['inputs']['request_id'] = self.rid
             self.event.write_text(json.dumps(event)); self.upload()
             sender = unittest.mock.Mock(side_effect=error)
@@ -322,7 +326,7 @@ class ComicTests(unittest.TestCase):
         self.upload(); self.api.fail_terminal_save=True
         sender = unittest.mock.Mock(return_value={'accepted_at':'2026-10-13T01:02:03Z','has_image':True})
         self.assertEqual(comic.receive(self.api,sender=sender,root=self.root),1)
-        self.assertEqual(self.record()['status'],'claimed')
+        self.assertEqual(self.record()['status'],'sending')
         self.assertIn('SMTP 已接受',self.summary.read_text())
         self.assertIn('持久结果保存未获确认',self.summary.read_text())
         with self.assertRaises(comic.ComicError):
@@ -363,7 +367,7 @@ class ComicTests(unittest.TestCase):
         smtp.return_value.send_message.return_value = {}
         for data, extension, mime in ((JPEG,'jpg','image/jpeg'),(WEBP,'webp','image/webp')):
             with self.subTest(mime=mime):
-                self.api = FakeAPI(); self.rid = str(uuid.uuid4())
+                self.api = self.new_api(); self.rid = str(uuid.uuid4())
                 self.image = self.root / ('comic.' + extension); self.image.write_bytes(data)
                 event = json.loads(self.event.read_text()); event['inputs']['request_id'] = self.rid
                 self.event.write_text(json.dumps(event)); self.upload()
@@ -385,7 +389,7 @@ class ComicTests(unittest.TestCase):
             with self.assertRaises(comic.ComicError):comic.request_id(rid)
 
     def test_temp_symlink_refused_before_smtp(self):
-        self.upload();(self.root/'images'/'.mail-bot-tmp').symlink_to(self.root)
+        self.upload();(self.root/'images').rmdir();(self.root/'images').symlink_to(self.root)
         sender=unittest.mock.Mock()
         self.assertEqual(comic.receive(self.api,sender=sender,root=self.root),1)
         sender.assert_not_called()

@@ -21,7 +21,8 @@
         "type": "http",
         "scheme": "bearer"
       }
-    }
+    },
+    "schemas": {}
   },
   "paths": {
     "/repos/xurenqi/mail-bot/actions/workflows/random.yml/dispatches": {
@@ -115,7 +116,60 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "additionalProperties": true,
+                  "properties": {
+                    "version": {
+                      "type": "integer"
+                    },
+                    "tasks": {
+                      "type": "object",
+                      "properties": {},
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "target_at": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "accepted_at": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "cleanup": {
+                            "type": "string"
+                          },
+                          "history": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "run_id": {
+                                  "type": "string"
+                                },
+                                "status": {
+                                  "type": "string"
+                                },
+                                "occurred_at": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "additionalProperties": true
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -158,7 +212,39 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "additionalProperties": true,
+                  "properties": {
+                    "total_count": {
+                      "type": "integer"
+                    },
+                    "workflow_runs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer"
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "conclusion": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "html_url": {
+                            "type": "string"
+                          },
+                          "display_title": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": true
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -201,7 +287,27 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true
+                  "additionalProperties": true,
+                  "properties": {
+                    "id": {
+                      "type": "integer"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "conclusion": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "html_url": {
+                      "type": "string"
+                    },
+                    "display_title": {
+                      "type": "string"
+                    }
+                  }
                 }
               }
             }

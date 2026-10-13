@@ -46,8 +46,12 @@ concurrency:
 
 jobs:
   test:
-    # Public copies distribute code; only private copies run the mail service.
-    if: github.event.repository.private == true
+    # Public runtime: explicit owner dispatch only. Schedules require privacy.
+    if: >-
+      github.event.repository.private == true ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.actor == github.repository_owner &&
+       github.triggering_actor == github.repository_owner)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 

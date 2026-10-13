@@ -32,7 +32,10 @@ jobs:
   status:
     # Ordinary schedule checks do not need another runner just to refresh a page.
     if: >-
-      github.event.repository.private == true && (
+      (github.event.repository.private == true ||
+       (github.event_name == 'workflow_dispatch' &&
+        github.actor == github.repository_owner &&
+        github.triggering_actor == github.repository_owner)) && (
       github.event_name != 'workflow_run' ||
       github.event.workflow_run.name != 'Random Mail Scheduler' ||
       github.event.workflow_run.event != 'schedule' ||

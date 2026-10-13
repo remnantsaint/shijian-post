@@ -10,7 +10,11 @@ concurrency:
   cancel-in-progress: false
 jobs:
   send:
-    if: github.event.repository.private == true
+    if: >-
+      github.event.repository.private == true ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.actor == github.repository_owner &&
+       github.triggering_actor == github.repository_owner)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

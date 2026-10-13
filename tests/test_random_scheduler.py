@@ -182,7 +182,7 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(api.events, ["send_due:false"])
         self.assertFalse(self.puts(api))
 
-    def test_no_plan_poll_disables_workflow(self):
+    def test_no_plan_poll_keeps_background_audit_without_sending(self):
         api = MockAPI()
         self.assertIsNone(self.scheduler(api).prepare("poll"))
         self.assertEqual(api.events, ["send_due:false"])
@@ -193,11 +193,27 @@ class SchedulerTests(unittest.TestCase):
         scheduler.prepare("poll")
         api.events.clear()
         state = self.scheduler(api, run_id="900").prepare("disable")
-        self.assertEqual(api.events, ["persist:disabled", "send_due:false"])
+        self.assertEqual(api.events, ["persist:disabled", "send_due:false", "disable"])
         self.assertEqual(state["last_send"]["run_id"], "42")
         self.assertEqual(state["last_send"]["run_attempt"], 3)
         self.assertEqual(state["last_send"]["status"], "uncertain")
         self.assertEqual(state["last_send"]["occurred_at"], format_time(NOW))
+
+    def test_explicit_close_stops_workflow_even_without_plan(self):
+        api = MockAPI()
+        self.assertIsNone(self.scheduler(api).prepare("disable"))
+        self.assertEqual(api.events, ["send_due:false", "disable"])
+        self.assertFalse(self.puts(api))
+
+    def test_close_disable_failure_does_not_restore_saved_plan(self):
+        api = MockAPI(state_at(mode="repeat"))
+        api.fail_disable = True
+        with self.assertRaises(GitHubAPIError):
+            self.scheduler(api).prepare("disable")
+        self.assertFalse(api.state["enabled"])
+        self.assertEqual(api.state["state"], "disabled")
+        self.assertIsNone(api.state["next_send_at"])
+        self.assertNotIn("send_due:true", api.events)
 
     def test_future_plan_does_not_claim_or_send(self):
         api = MockAPI(state_at(NOW + timedelta(seconds=1)))
@@ -221,7 +237,7 @@ class SchedulerTests(unittest.TestCase):
         self.assertNotIn("send_due:true", api.events)
         self.assertEqual(api.state["state"], "scheduled")
 
-    def test_finalize_once_finishes_and_disables_after_persist(self):
+    def test_finalize_once_finishes_plan_and_keeps_background_audit(self):
         api = MockAPI(state_at())
         scheduler = self.scheduler(api)
         scheduler.prepare("poll")

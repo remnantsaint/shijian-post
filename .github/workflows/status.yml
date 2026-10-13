@@ -7,10 +7,14 @@ on:
     paths:
       - .github/workflows/main.yml
       - .github/workflows/random.yml
+      - .github/workflows/dragon-letter.yml
       - .github/workflows/status.yml
       - scripts/status_history.py
+      - scripts/control_bot.py
+      - scripts/send_letter.py
+      - scripts/reserve_letter.py
   workflow_run:
-    workflows: [QQ Mail Bot, Random Mail Scheduler]
+    workflows: [QQ Mail Bot, Random Mail Scheduler, 小龙娘来信]
     types: [completed]
 
 permissions:
@@ -31,7 +35,8 @@ jobs:
       github.event_name != 'workflow_run' ||
       github.event.workflow_run.name != 'Random Mail Scheduler' ||
       github.event.workflow_run.event != 'schedule' ||
-      github.event.workflow_run.conclusion != 'success'
+      (github.event.workflow_run.conclusion != 'success' &&
+       github.event.workflow_run.conclusion != 'skipped')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

@@ -40,6 +40,7 @@ class FakeAPI:
         self.state_sha = "state-head" if state is not None else None
         self.fail_write = False
         self.fail_disable = False
+        self.letter_workflow = GitHubAPIError("Not found", status=404)
 
     def request(self, method, path, data=None):
         self.calls.append((method, path, copy.deepcopy(data)))
@@ -84,6 +85,10 @@ class FakeAPI:
             return {"id": 101}
         if path.endswith("/workflows/random.yml"):
             return {"id": 102, "state": self.workflow_state}
+        if path.endswith("/workflows/dragon-letter.yml"):
+            if isinstance(self.letter_workflow, Exception):
+                raise self.letter_workflow
+            return copy.deepcopy(self.letter_workflow)
         raise AssertionError("Unexpected read")
 
     def mutations(self):
@@ -312,6 +317,32 @@ class ControlTests(unittest.TestCase):
                         ("POST", f"/repos/{api.repo}/actions/runs/42/cancel", None),
                     ])
                     self.assertIn("仍可能已被 SMTP 接受", output[0])
+
+    def test_cancel_letter_run_only_when_optional_workflow_identity_matches(self):
+        self.api.letter_workflow = {"id": 104, "state": "active"}
+        self.api.run["workflow_id"] = 104
+        self.controller.cancel_run(42)
+        self.assertEqual(self.api.mutations(), [
+            ("POST", f"/repos/{self.api.repo}/actions/runs/42/cancel", None),
+        ])
+        self.assertIn("尚未确认运行已停止", self.output[0])
+
+    def test_optional_letter_404_still_allows_existing_mail_workflows(self):
+        self.controller.cancel_run(42)
+        self.assertIn(("GET", f"/repos/{self.api.repo}/actions/workflows/dragon-letter.yml", None),
+                      self.api.calls)
+        self.assertEqual(len(self.api.mutations()), 1)
+
+    def test_optional_letter_errors_or_invalid_identity_do_not_cancel_any_run(self):
+        for response, error in ((GitHubAPIError("private-letter-response", status=403), GitHubAPIError),
+                                (None, ControlError), ({}, ControlError),
+                                ({"id": True}, ControlError), ({"id": "private-value"}, ControlError)):
+            with self.subTest(response=response):
+                api = FakeAPI()
+                api.letter_workflow = response
+                with self.assertRaises(error):
+                    Controller(api).cancel_run(42)
+                self.assertFalse(api.mutations())
 
     def test_cancel_does_not_affect_readonly_ci_or_another_repository(self):
         cases = ({"workflow_id": 103}, {"repository": {"full_name": "other/repo"}},

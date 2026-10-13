@@ -19,6 +19,7 @@ from scripts.status_history import ReportError, make_report
 DEFAULT_REPO = "xurenqi/mail-bot"
 SEND_WORKFLOW = "main.yml"
 PLAN_WORKFLOW = "random.yml"
+LETTER_WORKFLOW = "dragon-letter.yml"
 UNITS = {"minutes": "分钟", "hours": "小时", "days": "天"}
 DELAYS = {"immediate": "立即发送", "random_3min": "3 分钟内随机发送"}
 MODES = {"once": "安排一次", "repeat": "循环随机发送"}
@@ -169,8 +170,18 @@ class Controller:
             if not isinstance(data, dict):
                 raise ControlError("无法确认邮件工作流身份；未提交取消。")
             allowed.add(positive_run_id(data.get("id")))
+        try:
+            letter = self.api.request(
+                "GET", f"{self.prefix}/actions/workflows/{LETTER_WORKFLOW}")
+        except GitHubAPIError as exc:
+            if exc.status != 404:
+                raise
+        else:
+            if not isinstance(letter, dict):
+                raise ControlError("无法确认来信工作流身份；未提交取消。")
+            allowed.add(positive_run_id(letter.get("id")))
         if type(run.get("workflow_id")) is not int or run["workflow_id"] not in allowed:
-            raise ControlError("仅允许取消邮件发送或随机计划工作流；未提交取消。")
+            raise ControlError("仅允许取消邮件发送、来信或随机计划工作流；未提交取消。")
         if run.get("status") == "completed":
             self.output("该运行已结束，没有提交取消或重跑。邮件仍可能已被 SMTP 接受，请查看历史和收件箱。")
             return

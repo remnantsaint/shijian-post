@@ -47,17 +47,17 @@ permissions:
 env:
   TZ: Asia/Shanghai
 
-concurrency:
-  group: mail-bot-unique-letters
-  cancel-in-progress: false
-
 jobs:
-  startup-audit:
-    name: Record workflow startup
+  random-mail:
+    if: >-
+      github.event_name != 'schedule' ||
+      (github.event.schedule == '*/5 * * * *' && vars.MAIL_BOT_POLL_MINUTES == '5') ||
+      (github.event.schedule == '17 * * * *' && vars.MAIL_BOT_POLL_MINUTES != '5')
     runs-on: ubuntu-24.04
-    timeout-minutes: 2
-    permissions:
-      contents: read
+    timeout-minutes: 8
+    concurrency:
+      group: mail-bot-random-${{ github.event_name == 'schedule' && 'poll' || inputs.action == '查看状态' && 'status' || 'control' }}
+      cancel-in-progress: false
     steps:
       - name: Record startup time and context
         env:
@@ -104,14 +104,6 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
-  random-mail:
-    if: >-
-      github.event_name != 'schedule' ||
-      (github.event.schedule == '*/5 * * * *' && vars.MAIL_BOT_POLL_MINUTES == '5') ||
-      (github.event.schedule == '17 * * * *' && vars.MAIL_BOT_POLL_MINUTES != '5')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 8
-    steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-python@v7.0.0
         with:

@@ -211,7 +211,11 @@ class Scheduler:
         self.output = output or (lambda due: None)
 
     def disable_workflow(self):
-        print("随机计划已结束或暂停；保留工作流启用状态，以便后续定时检查和重新安排。")
+        self.api.request("PUT", f"/repos/{self.api.repo}/actions/workflows/{WORKFLOW_FILE}/disable")
+        print("随机计划及后台检查已关闭，工作流已停用；历史保留。")
+
+    def keep_audit_enabled(self):
+        print("目前没有可执行的邮件计划；保留按配置频率运行的后台审计。选择关闭计划可停止后续检查。")
 
     def next_time(self, lower, upper):
         return format_time(self.now() + timedelta(minutes=self.choose_delay(lower, upper)))
@@ -266,7 +270,7 @@ class Scheduler:
             raise SchedulerError("随机计划操作无效；未发送邮件。")
         if state is None or not state["enabled"] or state["state"] in ("completed", "paused", "disabled"):
             self.output(False)
-            self.disable_workflow()
+            self.keep_audit_enabled()
             return state
         if state["state"] == "sending":
             self.record(state, "uncertain")
@@ -274,7 +278,7 @@ class Scheduler:
             self.store.save(state, "Pause random mail after uncertain result")
             print("上次运行未完成结果确认，已暂停；请核对收件箱与运行记录，不会自动重发。")
             self.output(False)
-            self.disable_workflow()
+            self.keep_audit_enabled()
             return state
         if parse_time(state["next_send_at"]) > self.now():
             print(f"尚未到发送时间，下次目标：{display_time(state['next_send_at'])}。")
@@ -311,7 +315,7 @@ class Scheduler:
                 print("单次计划的 SMTP 步骤成功，计划已结束。")
             else:
                 print("SMTP 步骤失败或结果不明，计划已暂停；请先核对收件箱，不会自动重试。")
-            self.disable_workflow()
+            self.keep_audit_enabled()
         return state
 
 

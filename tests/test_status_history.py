@@ -51,6 +51,11 @@ class FakeAPI:
         self.responses[f"{BASE}/contents/.mail-bot/random.json?ref=mail-bot-state"] = {
             "encoding": "base64", "content": data}
 
+    def letters(self, runs=()):
+        self.responses[f"{BASE}/actions/workflows/dragon-letter.yml"] = {"state": "active"}
+        self.responses[f"{BASE}/actions/workflows/dragon-letter.yml/runs?per_page=20"] = {
+            "workflow_runs": list(runs)}
+
 
 def run(run_id, attempt=1, state="completed", conclusion="success"):
     return {"id": run_id, "run_attempt": attempt, "status": state,
@@ -66,6 +71,99 @@ def plan(history=()):
 
 
 class StatusTests(unittest.TestCase):
+    def test_letter_smtp_outcomes_use_real_steps_not_overall_result(self):
+        for name in status.SEND_STEPS:
+            for conclusion, expected in (("success", "SMTP 已接受"),
+                                         ("failure", "发送失败或结果不确定；查看摘要"),
+                                         ("cancelled", "发送被取消，结果不确定"),
+                                         ("skipped", "未发送（发送步骤未执行）")):
+                with self.subTest(name=name, conclusion=conclusion):
+                    api = FakeAPI()
+                    api.letters([run(50, conclusion="success" if conclusion != "success" else "failure")])
+                    api.jobs(50, [{"name": name, "status": "completed",
+                                   "conclusion": conclusion, "completed_at": "2026-10-12T04:05:00Z"}])
+                    report = status.make_report(api, REPO, now=NOW)
+                    latest = next(line for line in report.splitlines()
+                                  if line.startswith("最近一次小龙娘来信："))
+                    self.assertIn(expected, latest)
+                    self.assertIn("/runs/50/attempts/1", latest)
+                    row = next(line for line in report.splitlines() if line.startswith("|") and "运行 #50" in line)
+                    self.assertIn("| 2026-10-12 12:05:00 | 发送步骤结束 |", row)
+                    self.assertIn("| 小龙娘来信 |", row)
+
+    def test_letter_running_and_queued_are_current_without_false_acceptance(self):
+        for name in ("Send long personal letter through QQ SMTP", "Send personal letter via QQ SMTP"):
+            for run_status, step_status, expected in (("in_progress", "in_progress", "正在发送"),
+                                                     ("queued", "queued", "排队或等待启动")):
+                with self.subTest(name=name, state=run_status):
+                    api = FakeAPI()
+                    api.letters([run(51, state=run_status, conclusion=None)])
+                    api.jobs(51, [{"name": name, "status": step_status, "conclusion": None}])
+                    report = status.make_report(api, REPO, now=NOW)
+                    self.assertIn(f"最近一次小龙娘来信：{expected}", report)
+                    self.assertNotIn("SMTP 已接受", report)
+                    if run_status == "queued":
+                        self.assertFalse(any("/runs/51/attempts/1/jobs?" in path for _, path in api.calls))
+
+    def test_letter_old_attempt_keeps_its_own_time_or_unknown(self):
+        api = FakeAPI()
+        api.letters([run(52, attempt=3, state="queued", conclusion=None)])
+        api.jobs(52, [{"name": "Send personal letter via QQ SMTP", "conclusion": "failure",
+                       "completed_at": "2026-10-12T03:45:00Z"}], attempt=2)
+        api.jobs(52, [{"name": "Send long personal letter through QQ SMTP",
+                       "conclusion": "success"}], attempt=1)
+        report = status.make_report(api, REPO, now=NOW)
+        old_row = next(line for line in report.splitlines() if line.startswith("|") and "第 1 次" in line)
+        self.assertIn("| 时间未知 | 未知 |", old_row)
+        self.assertIn("SMTP 已接受", old_row)
+        middle_row = next(line for line in report.splitlines() if line.startswith("|") and "第 2 次" in line)
+        self.assertIn("2026-10-12 11:45:00", middle_row)
+        self.assertIn("发送失败", middle_row)
+        self.assertIn("最近一次小龙娘来信：排队或等待启动", report)
+
+    def test_missing_optional_letter_workflow_is_compatible_but_forbidden_is_error(self):
+        api = FakeAPI()
+        report = status.make_report(api, REPO, now=NOW)
+        self.assertIn("小龙娘来信工作流：尚未配置", report)
+        self.assertFalse(any("dragon-letter.yml/runs" in path for _, path in api.calls))
+        api.responses[f"{BASE}/actions/workflows/dragon-letter.yml"] = APIError(403)
+        with self.assertRaises(GitHubAPIError):
+            status.make_report(api, REPO, now=NOW)
+        self.assertTrue(all(method == "GET" for method, _ in api.calls))
+
+    def test_main_letter_and_persistent_random_history_are_merged_without_poll_runs(self):
+        api = FakeAPI([run(53)])
+        api.jobs(53, [{"name": status.SEND_STEP, "conclusion": "success",
+                       "completed_at": "2026-10-12T04:10:00Z"}])
+        api.letters([run(54)])
+        api.jobs(54, [{"name": "Send personal letter via QQ SMTP", "conclusion": "success",
+                       "completed_at": "2026-10-12T04:30:00Z"}])
+        api.random_state(plan([{"run_id": "55", "run_attempt": 1,
+                                "occurred_at": "2026-10-12T04:20:00Z", "status": "accepted"}]))
+        report = status.make_report(api, REPO, now=NOW)
+        rows = [line for line in report.splitlines() if line.startswith("| 2026")]
+        self.assertEqual(len(rows), 3)
+        self.assertIn("运行 #54", rows[0])
+        self.assertIn("运行 #55", rows[1])
+        self.assertIn("运行 #53", rows[2])
+        self.assertFalse(any("random.yml/runs" in path for _, path in api.calls))
+        self.assertTrue(all(method == "GET" for method, _ in api.calls))
+
+    def test_enabled_plan_with_stopped_or_missing_workflow_does_not_await_poll(self):
+        for workflow_state in ("disabled_manually", "disabled_inactivity", "deleted", "unknown", None):
+            with self.subTest(workflow_state=workflow_state):
+                api = FakeAPI()
+                api.random_state(plan())
+                api.responses[f"{BASE}/actions/workflows/random.yml"] = (
+                    APIError(404) if workflow_state is None else {"state": workflow_state})
+                report = status.make_report(api, REPO, now=NOW)
+                self.assertIn("无法", report)
+                self.assertIn("随机工作流未启用定时检查", report)
+                self.assertNotIn("正在等待下次检查", report)
+                self.assertNotIn("检查间隔约", report)
+                self.assertNotIn("检查间隔未确认", report)
+                self.assertTrue(all(method == "GET" for method, _ in api.calls))
+
     def test_accepted_step_survives_overall_failure_and_uses_latest_attempt(self):
         api = FakeAPI([run(11, attempt=2, conclusion="failure")])
         api.jobs(11, [{"name": status.SEND_STEP, "status": "completed", "conclusion": "success"}], 2)

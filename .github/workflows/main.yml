@@ -29,6 +29,10 @@ permissions:
 env:
   TZ: Asia/Shanghai
 
+concurrency:
+  group: mail-bot-manual-mail
+  cancel-in-progress: false
+
 jobs:
   test:
     runs-on: ubuntu-24.04
@@ -50,7 +54,7 @@ jobs:
           SEND_DELAY: ${{ inputs.send_delay || '立即发送' }}
         run: python scripts/wait_before_send.py
       - name: Reserve never-reused random letter
-        if: inputs.message_type == 'random'
+        if: ${{ (inputs.message_type || 'random') == 'random' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python -m scripts.reserve_letter

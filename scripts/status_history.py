@@ -15,6 +15,10 @@ from .time_utils import UTC, format_beijing, format_utc, parse_utc, utc_now
 
 
 SEND_STEP = "Send mail through QQ SMTP"
+SEND_STEPS = frozenset({SEND_STEP, "Send long personal letter through QQ SMTP",
+                        "Send personal letter via QQ SMTP"})
+LETTER_WORKFLOW = "dragon-letter.yml"
+LETTER_LABEL = "小龙娘来信"
 WAIT_STEP = "Wait before sending"
 STATES = {"active": "启用", "disabled_manually": "手动停用",
           "disabled_inactivity": "因长期无活动停用", "deleted": "已删除"}
@@ -65,7 +69,7 @@ def step_result(run, jobs):
     if jobs is None:
         return "状态未知（步骤查询失败）"
     steps = [step for job in jobs for step in job.get("steps", [])]
-    send_steps = [step for step in steps if step.get("name") == SEND_STEP]
+    send_steps = [step for step in steps if step.get("name") in SEND_STEPS]
     if any(step.get("conclusion") == "success" for step in send_steps):
         return "SMTP 已接受"
     if any(step.get("status") == "in_progress" for step in send_steps):
@@ -97,7 +101,7 @@ def record_details(jobs, fallback=None, fallback_source="运行更新时间"):
             except ReportError:
                 pass
         for step in job.get("steps", []):
-            if step.get("name") == SEND_STEP and step.get("completed_at"):
+            if step.get("name") in SEND_STEPS and step.get("completed_at"):
                 try:
                     send_dates.append(timestamp(step["completed_at"]))
                 except ReportError:
@@ -119,13 +123,20 @@ def history_sort_key(entry):
 
 
 def read_main_runs(api, repo):
-    workflow = api.request("GET", f"/repos/{repo}/actions/workflows/main.yml")
-    response = api.request("GET", f"/repos/{repo}/actions/workflows/main.yml/runs?per_page=20")
+    return read_workflow_runs(api, repo, "main.yml", "QQ Mail Bot")
+
+
+def read_workflow_runs(api, repo, filename, label, optional=False):
+    path = f"/repos/{repo}/actions/workflows/{filename}"
+    workflow = optional_read(api, path) if optional else api.request("GET", path)
+    if workflow is None and optional:
+        return None, []
+    response = api.request("GET", f"{path}/runs?per_page=20")
     if not isinstance(workflow, dict) or not isinstance(response, dict):
-        raise ReportError("主工作流响应格式无效，无法确认状态。")
+        raise ReportError("邮件工作流响应格式无效，无法确认状态。")
     runs = response.get("workflow_runs")
     if not isinstance(runs, list):
-        raise ReportError("主工作流运行列表无效，无法确认状态。")
+        raise ReportError("邮件工作流运行列表无效，无法确认状态。")
     entries = []
     recent_runs = sorted(runs[:20], key=lambda run: timestamp(
         run.get("updated_at") or run.get("created_at")), reverse=True)
@@ -155,7 +166,7 @@ def read_main_runs(api, repo):
             entries.append({"run_id": run_id, "run_attempt": attempt,
                             "date": date, "time_source": source,
                             "kind": kind, "result": step_result(attempt_run, jobs),
-                            "workflow": "QQ Mail Bot"})
+                            "workflow": label})
         if len(entries) >= 20:
             break
     entries.sort(key=history_sort_key, reverse=True)
@@ -234,15 +245,22 @@ def random_description(repo, workflow, state, now, interval):
     else:
         workflow_state = STATES.get(workflow.get("state"), "未知")
         lines.append(f"随机计时工作流：{workflow_state}。")
+        if state['enabled'] and workflow.get("state") != "active":
+            lines.append("计划仍标记启用，但随机工作流已停用或状态未确认，当前无法自动发送。"
+                         "请先核验历史并关闭旧计划，再按需要重新安排。")
+    can_poll = workflow is not None and workflow.get("state") == "active"
     if state.get("next_send_at"):
         target = timestamp(state["next_send_at"])
         lines.append(f"下一次计划发送：北京时间 {beijing(target)}。")
         if state['enabled'] and state['state'] == 'scheduled' and target <= now:
             late_seconds = int((now - target).total_seconds())
             minutes, seconds = divmod(late_seconds, 60)
-            lines.append(f"计划时间已到，已晚 {minutes} 分 {seconds} 秒；"
-                         "正在等待下次检查，GitHub 调度可能延迟。")
-    if interval is None:
+            suffix = ("正在等待下次检查，GitHub 调度可能延迟。" if can_poll else
+                      "工作流未运行，无法等待定时检查执行该计划。")
+            lines.append(f"计划时间已到，已晚 {minutes} 分 {seconds} 秒；{suffix}")
+    if not can_poll:
+        lines.append("随机工作流未启用定时检查。")
+    elif interval is None:
         lines.append("检查间隔未确认（无法读取仓库变量）；请查看 Actions 状态报告。GitHub 调度和排队可能延迟，不保证准点。")
     else:
         lines.append(f"检查间隔约 {interval} 分钟；GitHub 调度和排队额外计算，不保证准点。")
@@ -259,6 +277,8 @@ def make_report(api, repo, now=None, check_interval="60"):
     except (ValueError, OverflowError):
         raise ReportError("查询时间无效，无法确认状态。") from None
     workflow, manual = read_main_runs(api, repo)
+    letter_workflow, letters = read_workflow_runs(
+        api, repo, LETTER_WORKFLOW, LETTER_LABEL, optional=True)
     random_workflow, state, random_history = read_random_state(api, repo)
     query_completed = query_started if now is not None else utc_now()
     lines = ["# 邮件机器人状态与发送历史", "",
@@ -273,11 +293,21 @@ def make_report(api, repo, now=None, check_interval="60"):
                      f"[查看运行]({run_url(repo, latest['run_id'], latest['run_attempt'])})。")
     else:
         lines.append("主工作流尚无运行记录。")
+    if letter_workflow is None:
+        lines.append(f"{LETTER_LABEL}工作流：尚未配置。")
+    else:
+        lines.append(f"{LETTER_LABEL}工作流：{STATES.get(letter_workflow.get('state'), '未知')}。")
+        if letters:
+            latest = letters[0]
+            lines.append(f"最近一次{LETTER_LABEL}：{latest['result']}；"
+                         f"[查看运行]({run_url(repo, latest['run_id'], latest['run_attempt'])})。")
+        else:
+            lines.append(f"{LETTER_LABEL}尚无运行记录。")
     lines.extend(random_description(repo, random_workflow, state, query_completed,
                                     None if check_interval is None else
                                     5 if check_interval == "5" else 60))
     unique = {}
-    for entry in manual + random_history:
+    for entry in manual + letters + random_history:
         key = (entry['run_id'], entry['run_attempt'])
         if key not in unique or history_sort_key(entry) > history_sort_key(unique[key]):
             unique[key] = entry
@@ -293,7 +323,7 @@ def make_report(api, repo, now=None, check_interval="60"):
                      f"({run_url(repo, entry['run_id'], entry['run_attempt'])}) |")
     if not history:
         lines.append("| — | — | — | 尚无记录 | — | — |")
-    lines += ["", "新版本成功发送的运行摘要包含邮件正文及图片附件有无；点击记录查看。",
+    lines += ["", "QQ Mail Bot 的摘要含正文及图片有无；长信摘要只记录发送结果、时间和附件数量，正文请在邮箱查看。",
               "时间来源区分 SMTP 接受、发送步骤结束、任务结束、运行更新时间和状态记录；均不代表实际收件时间。",
               "旧重跑缺少本次结束时间时显示时间未知，不使用其他重跑的时间。",
               "旧记录不会补出正文。历史受 GitHub 运行记录保留期限限制，快照不会自动刷新。", ""]

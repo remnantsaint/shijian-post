@@ -112,7 +112,7 @@ class ControlTests(unittest.TestCase):
                 patch("scripts.control_bot.GitHubAPI", return_value=self.api), \
                 patch("scripts.control_bot.make_report", side_effect=report), \
                 contextlib.redirect_stdout(io.StringIO()) as output:
-            self.assertEqual(main([]), 0)
+            self.assertEqual(main(["--repo", self.api.repo]), 0)
         self.assertIn("只读状态", output.getvalue())
         self.assertFalse(self.api.mutations())
 
@@ -424,7 +424,7 @@ class ControlTests(unittest.TestCase):
                 patch("scripts.control_bot.GitHubAPI", return_value=self.api), \
                 contextlib.redirect_stdout(io.StringIO()) as output, \
                 contextlib.redirect_stderr(io.StringIO()) as error:
-            self.assertEqual(main(["send"]), 1)
+            self.assertEqual(main(["--repo", self.api.repo, "send"]), 1)
         self.assertEqual(len(self.api.mutations()), 1)
         combined = output.getvalue() + error.getvalue()
         self.assertNotIn("private-token", combined)
@@ -436,7 +436,7 @@ class ControlTests(unittest.TestCase):
         with patch.dict("os.environ", {}, clear=True), \
                 patch("scripts.control_bot.GitHubAPI") as api_constructor, \
                 contextlib.redirect_stderr(io.StringIO()) as error:
-            self.assertEqual(main(["status"]), 1)
+            self.assertEqual(main(["--repo", self.api.repo, "status"]), 1)
         api_constructor.assert_not_called()
         self.assertIn("安全绑定", error.getvalue())
 
@@ -446,6 +446,23 @@ class ControlTests(unittest.TestCase):
                 patch("scripts.control_bot.make_report", return_value="状态"), \
                 contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(main(["--repo", self.api.repo]), 0)
+        api_constructor.assert_called_once_with(self.api.repo, "private-token")
+
+    def test_no_implicit_original_author_repository(self):
+        with patch.dict("os.environ", {"GH_TOKEN": "private-token"}, clear=True), \
+                patch("scripts.control_bot.GitHubAPI") as api_constructor, \
+                contextlib.redirect_stderr(io.StringIO()) as error:
+            self.assertEqual(main(["send"]), 1)
+        api_constructor.assert_not_called()
+        self.assertIn("--repo", error.getvalue())
+
+    def test_actions_default_repository_is_own_repository(self):
+        with patch.dict("os.environ", {"GH_TOKEN": "private-token",
+                                        "GITHUB_REPOSITORY": self.api.repo}, clear=True), \
+                patch("scripts.control_bot.GitHubAPI", return_value=self.api) as api_constructor, \
+                patch("scripts.control_bot.make_report", return_value="状态"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["status"]), 0)
         api_constructor.assert_called_once_with(self.api.repo, "private-token")
 
     def test_argparse_errors_never_echo_invalid_arguments(self):

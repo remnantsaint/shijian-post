@@ -32,11 +32,12 @@ jobs:
   status:
     # Ordinary schedule checks do not need another runner just to refresh a page.
     if: >-
+      github.event.repository.private == true && (
       github.event_name != 'workflow_run' ||
       github.event.workflow_run.name != 'Random Mail Scheduler' ||
       github.event.workflow_run.event != 'schedule' ||
       (github.event.workflow_run.conclusion != 'success' &&
-       github.event.workflow_run.conclusion != 'skipped')
+       github.event.workflow_run.conclusion != 'skipped'))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

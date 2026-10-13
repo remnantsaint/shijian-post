@@ -3,6 +3,36 @@
 使用 Python 3.12 标准库，通过 `smtp.qq.com:465` 的 SMTP SSL 发送中文 UTF-8 邮件。
 保留原工作流的环境测试步骤；不需要安装第三方依赖。
 
+## 每个人独立使用，互相隔离
+
+公开仓库只发布代码、运行离线检查；发送、随机计划与状态报告工作流仅在私有仓库执行。
+公开副本触发这些工作流会显示 `Skipped`，不会读取邮箱 Secrets、发送邮件或新增个人状态记录。
+这不是共享多用户服务；每个人都需要自己拥有一个私有运行仓库。
+
+推荐由代码仓库所有者在 **Settings → General → Template repository** 勾选模板选项。
+使用者随后点击 **Use this template → Create a new repository**，选择自己的账号和 **Private**，
+不要勾选 **Include all branches**。只复制代码，不复制作者的 `mail-bot-state`、旧计划或已用文案账本。
+模板功能未启用时，可通过 **Code → Download ZIP** 下载默认分支代码，解压后提交到自己的新私有仓库。
+不要 Fork 公开仓库后尝试改私有；公开 fork 通常不能变更为私有。
+
+在自己的私有仓库配置下面三个 Secrets，然后手动发送测试邮件。别人使用时也填写自己的配置，
+不要共享仓库的协作权限、授权码或控制令牌。状态分支会在首次需要时自动创建。
+本地控制命令必须传 `--repo 你的用户名/你的私有仓库`；Actions 内默认当前仓库，不默认操作原作者。
+只有保持私有并限制仓库读取权限，个人日志、计划和新历史才与其他普通使用者隔离；
+GitHub、邮件服务及你主动授权的协作者仍可能访问相应数据。
+
+已有使用者迁移时：私有仓库先只放代码，再由自己将旧 `mail-bot-state` 分支完整迁入，
+保留去重账本和历史，先检查计划已关闭，再配置 Secrets。不要复制别人的状态或清空自己的账本。
+复制代码不会复制 GitHub Secrets、Actions 运行记录或仓库变量，需要单独配置。
+已经公开的旧历史不会因迁移消失；清理旧运行记录或重写历史应单独确认处理。
+
+### 隔离是否生效
+
+- 私有仓库的 Secrets、Actions、状态分支均属于自己的仓库。
+- 普通其他使用者没有你私有仓库的读取权限；你也没有他们私有仓库的读取权限。
+- 公开副本的发送、计划与状态作业应为 `Skipped`；离线检查仍运行。
+- 公开源码和图片不是隐私数据，不要把私人照片或凭据上传到公开副本。
+
 ## GitHub Actions Secrets
 
 在仓库 **Settings → Secrets and variables → Actions → New repository secret** 创建：
@@ -116,15 +146,15 @@ GitHub 可能延迟或跳过调度，两种模式都不能保证准点，SMTP �
 
 | 需求 | 命令示例 |
 | --- | --- |
-| 查询当前状态和历史 | `python -m scripts.control_bot status` |
-| 发送一条随机小消息 | `python -m scripts.control_bot send --type random` |
-| 发送指定文字 | `python -m scripts.control_bot send --type custom --body '我在这里'` |
-| 随机等待最多 3 分钟再发送 | `python -m scripts.control_bot send --type random --delay random_3min` |
-| 发送已上传的图片 | `python -m scripts.control_bot send --image images/photo.jpg` |
-| 自定义单次随机计划 | `python -m scripts.control_bot plan --mode once --min 5 --min-unit minutes --max 30 --max-unit days` |
+| 查询当前状态和历史 | `python -m scripts.control_bot --repo 你的用户名/你的私有仓库 status` |
+| 发送一条随机小消息 | `python -m scripts.control_bot --repo 你的用户名/你的私有仓库 send --type random` |
+| 发送指定文字 | `python -m scripts.control_bot --repo 你的用户名/你的私有仓库 send --type custom --body '我在这里'` |
+| 随机等待最多 3 分钟再发送 | `python -m scripts.control_bot --repo 你的用户名/你的私有仓库 send --type random --delay random_3min` |
+| 发送已上传的图片 | `python -m scripts.control_bot --repo 你的用户名/你的私有仓库 send --image images/photo.jpg` |
+| 自定义单次随机计划 | `python -m scripts.control_bot --repo 你的用户名/你的私有仓库 plan --mode once --min 5 --min-unit minutes --max 30 --max-unit days` |
 | 自定义循环随机计划 | 同上，将 `--mode once` 改为 `--mode repeat` |
-| 关闭自动随机计划 | `python -m scripts.control_bot pause` |
-| 取消正在执行的邮件任务 | `python -m scripts.control_bot cancel-run --run-id 运行编号` |
+| 关闭自动随机计划 | `python -m scripts.control_bot --repo 你的用户名/你的私有仓库 pause` |
+| 取消正在执行的邮件任务 | `python -m scripts.control_bot --repo 你的用户名/你的私有仓库 cancel-run --run-id 运行编号` |
 
 “控制服务器”在这里指触发、停止邮件工作流以及管理计划；GitHub 临时运行器的系统由平台管理。
 取消任务不会撤回已经被 SMTP 接受的邮件。命令提交成功后仍要检查 Actions 结果，不能直接当成投递成功。

@@ -4,7 +4,7 @@ Use the existing checkout. Cloud tasks already run in isolation; create a Git wo
 
 The bot runs in GitHub Actions. The platform starts and removes temporary runners; this repository does not expose SSH, operating-system shutdown, or a permanent server.
 
-When the user explicitly requests an operation, use `python -m scripts.control_bot` from the repository root. Supported operations are status, send, plan, pause and cancel-run. Read [the usage guide](README.md) for arguments. Operate on `xurenqi/mail-bot` unless the user explicitly chooses another repository.
+When the user explicitly requests an operation, use `python -m scripts.control_bot` from the repository root. Supported operations are status, send, plan, pause and cancel-run. Read [the usage guide](README.md) for arguments. Operate only on the user's explicitly selected runtime repository, or the current `GITHUB_REPOSITORY` in Actions. For local CLI calls always pass `--repo owner/name`; never infer the original author's repository as the target. The public repository distributes code; sending, plans and status workflows require a private repository.
 
 - Status queries are read-only. Never infer permission to send a message from a status request.
 - Sending mail, creating a repeating plan, and cancelling a run require the user's instruction. Do not create arbitrary schedules or send a demonstration message without that instruction.

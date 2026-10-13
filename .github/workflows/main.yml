@@ -46,6 +46,8 @@ concurrency:
 
 jobs:
   test:
+    # Public copies distribute code; only private copies run the mail service.
+    if: github.event.repository.private == true
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 

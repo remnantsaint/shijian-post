@@ -16,7 +16,6 @@ from scripts.random_scheduler import (
 from scripts.status_history import ReportError, make_report
 
 
-DEFAULT_REPO = "xurenqi/mail-bot"
 SEND_WORKFLOW = "main.yml"
 PLAN_WORKFLOW = "random.yml"
 LETTER_WORKFLOW = "dragon-letter.yml"
@@ -214,7 +213,8 @@ def build_parser():
         description="通过 GitHub Actions 查询和控制邮件机器人，默认仅查看状态。",
         epilog="认证使用已有 GH_TOKEN 或 GITHUB_TOKEN 安全绑定；不要把令牌作为命令参数。这不是 ChatGPT Tasks 连接器。",
     )
-    parser.add_argument("--repo", default=DEFAULT_REPO, help="目标仓库 owner/name")
+    parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY"),
+                        help="目标仓库 owner/name；Actions 内默认当前仓库，本地必须指定")
     parser.set_defaults(command="status")
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("status", help="只读查询状态和历史")
@@ -239,6 +239,8 @@ def build_parser():
 def main(argv=None):
     try:
         args = build_parser().parse_args(argv)
+        if not args.repo:
+            raise ControlError("请用 --repo 明确指定自己的仓库；不会默认操作原作者的仓库。")
         token = os.environ.get("GH_TOKEN", "") or os.environ.get("GITHUB_TOKEN", "")
         if not token:
             raise ControlError("缺少 GitHub API 凭据；请在运行环境安全绑定 GH_TOKEN 或 GITHUB_TOKEN，不要发送到聊天或写入代码。")

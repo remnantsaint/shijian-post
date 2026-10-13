@@ -142,7 +142,12 @@ class Controller:
         )
         # Stop future polls before changing state; never enable a stale plan merely
         # to dispatch its closure. The SHA guards concurrent claims/finalization.
-        self.api.request("PUT", f"{self.prefix}/actions/workflows/{PLAN_WORKFLOW}/disable")
+        workflow = self.api.request("GET", f"{self.prefix}/actions/workflows/{PLAN_WORKFLOW}")
+        workflow_state = workflow.get("state") if isinstance(workflow, dict) else None
+        if workflow_state == "active":
+            self.api.request("PUT", f"{self.prefix}/actions/workflows/{PLAN_WORKFLOW}/disable")
+        elif workflow_state not in {"disabled_manually", "disabled_inactivity"}:
+            raise ControlError("无法确认随机工作流已停用；未修改计划状态，请核验工作流状态和权限。")
         if actual_plan:
             try:
                 store.save(closed_plan_state(state), "Disable random mail plan from assistant")

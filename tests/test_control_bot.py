@@ -234,6 +234,7 @@ class ControlTests(unittest.TestCase):
         for status, enabled in (("scheduled", True), ("sending", True), ("paused", False)):
             with self.subTest(status=status):
                 self.api = FakeAPI(plan_state(status, enabled))
+                self.api.workflow_state = "active"
                 old_history = {"run_id": "10", "run_attempt": 1,
                                "occurred_at": "2026-10-12T01:00:00Z", "status": "accepted"}
                 self.api.state["history"] = [old_history]
@@ -291,13 +292,46 @@ class ControlTests(unittest.TestCase):
 
     def test_pause_missing_disabled_or_completed_plan_does_not_dispatch(self):
         for state in (None, plan_state("disabled", False), plan_state("completed", False)):
-            with self.subTest(state=state):
-                api = FakeAPI(state)
+            for workflow_state in ("active", "disabled_manually", "disabled_inactivity"):
+                with self.subTest(state=state, workflow_state=workflow_state):
+                    api = FakeAPI(state)
+                    api.workflow_state = workflow_state
+                    Controller(api, self.output.append).pause()
+                    self.assertEqual(api.state, state)
+                    expected = [
+                        ("PUT", f"/repos/{api.repo}/actions/workflows/random.yml/disable", None),
+                    ] if workflow_state == "active" else []
+                    self.assertEqual(api.mutations(), expected)
+
+    def test_pause_already_disabled_workflow_closes_state_without_management_write(self):
+        for workflow_state in ("disabled_manually", "disabled_inactivity"):
+            with self.subTest(workflow_state=workflow_state):
+                api = FakeAPI(plan_state())
+                api.workflow_state = workflow_state
+                api.fail_disable = True  # A redundant management write would fail.
+                original = copy.deepcopy(api.state)
                 Controller(api, self.output.append).pause()
-                self.assertEqual(api.state, state)
-                self.assertEqual(api.mutations(), [
-                    ("PUT", f"/repos/{api.repo}/actions/workflows/random.yml/disable", None),
-                ])
+                self.assertEqual(len(api.mutations()), 1)
+                self.assertEqual(api.mutations()[0][:2], (
+                    "PUT", f"/repos/{api.repo}/contents/{STATE_PATH}"))
+                self.assertEqual(api.mutations()[0][2]["sha"], "state-head")
+                self.assertFalse(api.state["enabled"])
+                self.assertEqual(api.state["state"], "disabled")
+                self.assertIsNone(api.state["next_send_at"])
+                self.assertEqual(api.state["history"], original["history"])
+                self.assertEqual(api.workflow_state, workflow_state)
+
+    def test_pause_unknown_workflow_state_has_no_writes(self):
+        for workflow_state in (None, "", "unknown", "deleted", "disabled_fork"):
+            with self.subTest(workflow_state=workflow_state):
+                api = FakeAPI(plan_state())
+                api.workflow_state = workflow_state
+                original = copy.deepcopy(api.state)
+                with self.assertRaises(ControlError) as error:
+                    Controller(api).pause()
+                self.assertIn("未修改计划状态", str(error.exception))
+                self.assertEqual(api.state, original)
+                self.assertFalse(api.mutations())
 
     def test_pause_corrupt_state_does_not_disable_or_overwrite(self):
         self.api.state = {"history": "private-value"}

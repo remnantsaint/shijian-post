@@ -174,6 +174,11 @@ class ComicTests(unittest.TestCase):
             comic.adopt(self.api,'asset:20','另一个标题','另一段正文')
         self.assertEqual(len(self.api.records),1)
 
+    def test_repository_case_does_not_change_manual_request_identity(self):
+        self.manual_asset();self.api.repo='OWNER/MAIL-BOT'
+        rid=comic.adopt(self.api,'asset:20','title','body')
+        self.assertEqual(rid,str(uuid.uuid5(uuid.NAMESPACE_URL,'mail-bot:owner/mail-bot:asset:20')))
+
     def test_automatic_asset_cannot_be_registered_under_a_new_request(self):
         self.upload()
         with self.assertRaises(comic.ComicError):

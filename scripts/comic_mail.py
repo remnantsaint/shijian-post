@@ -325,7 +325,7 @@ def adopt(api, source, subject, body):
     canonical = re.fullmatch(r"mailbot-([0-9a-f-]{36})\.(png|jpg|webp)", asset.get("name", ""))
     if canonical and store.load(request_id(canonical[1]))[0] is not None:
         raise ComicError("这个附件已有发送请求；请查询原请求，禁止重复登记")
-    rid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"mail-bot:{api.repo}:asset:{asset_id}"))
+    rid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"mail-bot:{api.repo.casefold()}:asset:{asset_id}"))
     print(f"漫画请求编号：{rid}；同一草稿附件只能登记一次。")
     if store.load(rid)[0] is not None:
         raise ComicError("这个附件已登记或处理；禁止通过重复运行再次发送")

@@ -6,6 +6,7 @@ import smtplib
 import ssl
 import sys
 import html
+import json
 from email import policy
 from email.message import EmailMessage
 from email.utils import format_datetime, make_msgid
@@ -48,8 +49,24 @@ def address(name):
 
 
 def custom_content():
-    subject = os.environ.get("CUSTOM_MAIL_SUBJECT", os.environ.get("MAIL_SUBJECT", ""))
-    body = os.environ.get("CUSTOM_MAIL_BODY", os.environ.get("MAIL_BODY", ""))
+    in_actions = os.environ.get("GITHUB_ACTIONS", "").lower() == "true"
+    if in_actions:
+        # Read inputs here instead of exposing them in the step's env log.
+        try:
+            with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as event_file:
+                event_text = event_file.read(1024 * 1024 + 1)
+            if len(event_text) > 1024 * 1024:
+                raise ValueError
+            inputs = json.loads(event_text)["inputs"]
+            subject = inputs.get("custom_subject", "")
+            body = inputs.get("custom_body", "")
+            if not isinstance(subject, str) or not isinstance(body, str):
+                raise ValueError
+        except (OSError, KeyError, ValueError, TypeError, AttributeError):
+            raise ConfigurationError("无法读取自定义邮件触发参数；已阻止发送") from None
+    else:
+        subject = os.environ.get("CUSTOM_MAIL_SUBJECT", os.environ.get("MAIL_SUBJECT", ""))
+        body = os.environ.get("CUSTOM_MAIL_BODY", os.environ.get("MAIL_BODY", ""))
     if (len(subject) > MAX_CUSTOM_SUBJECT_CHARACTERS
             or any(not character.isprintable() for character in subject)):
         raise ConfigurationError("自定义邮件主题必须是单行文本，且不能超过 200 个字符")
@@ -63,6 +80,10 @@ def custom_content():
         body.encode("utf-8")
     except UnicodeEncodeError:
         raise ConfigurationError("自定义邮件内容必须是合法的 UTF-8 文本") from None
+    if in_actions:
+        for value in (subject, body):
+            escaped = value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+            print(f"::add-mask::{escaped}")
     return subject, body
 
 
@@ -202,11 +223,10 @@ def append_send_summary(status, result=None, explanation=""):
     )
     if result:
         summary += f"| 图片附件 | {'有' if result['has_image'] else '无'} |\n\n"
-        summary += f"### {html.escape(result['subject'])}\n\n<pre>{html.escape(result['body'])}</pre>\n\n"
         summary += "SMTP 接受不等于最终投递或已读，请以收件邮箱为准。\n"
     else:
         summary += f"\n{html.escape(explanation)}\n"
-    summary += "\n本记录不包含邮箱地址或授权码。\n"
+    summary += "\n本记录仅保存发送元数据，不保存主题、正文、附件路径、邮箱地址或授权码。\n"
     try:
         with open(summary_path, "a", encoding="utf-8") as output:
             output.write(summary)

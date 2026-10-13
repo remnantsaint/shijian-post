@@ -330,6 +330,7 @@ class ReserveLetterTests(unittest.TestCase):
         self.assertEqual(lines[2], "::add-mask::第二段 🐉")
         self.assertNotIn(title, lines[-1])
         self.assertNotIn("第二段", lines[-1])
+        self.assertNotIn("body-sha256:test", output.getvalue())
 
     def test_action_mask_escapes_command_control_characters(self):
         output = io.StringIO()

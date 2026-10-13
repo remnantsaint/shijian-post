@@ -17,7 +17,7 @@ on:
         required: false
         default: ''
       custom_body:
-        description: 自定义正文（custom 必填，请勿填写邮箱授权码）
+        description: 自定义正文（custom 必填，普通触发参数，请勿填写隐私或凭据）
         type: string
         required: false
         default: ''
@@ -54,8 +54,10 @@ jobs:
         run: |
           echo "GitHub Actions OK"
           date '+北京时间 %Y-%m-%d %H:%M:%S %z'
-      - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-python@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
       - name: Run offline tests
@@ -75,7 +77,5 @@ jobs:
           QQ_SMTP_AUTH_CODE: ${{ secrets.QQ_SMTP_AUTH_CODE }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
           MESSAGE_TYPE: ${{ inputs.message_type || 'random' }}
-          CUSTOM_MAIL_SUBJECT: ${{ inputs.custom_subject }}
-          CUSTOM_MAIL_BODY: ${{ inputs.custom_body }}
           IMAGE_PATH: ${{ inputs.image_path }}
         run: python scripts/send_mail.py

@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import os
 import smtplib
 import ssl
@@ -65,7 +66,8 @@ class MailTests(unittest.TestCase):
         self.assertEqual(message["Subject"], "中文消息：你好！")
         self.assertEqual(message.get_content(), "我在这里\n")
         self.assertIn("自定义邮件", report)
-        self.assertIn("我在这里", report)
+        self.assertNotIn("我在这里", report)
+        self.assertNotIn("中文消息：你好！", report)
 
     @patch("scripts.send_mail.smtplib.SMTP_SSL")
     def test_custom_invalid_subject_rejects_before_smtp_without_echoing_payload(self, smtp):
@@ -109,6 +111,57 @@ class MailTests(unittest.TestCase):
         self.assertEqual(custom.get_content().rstrip("\r\n"), "我在这里")
         self.assertEqual(random_message["Subject"], "已预留的随机主题")
         self.assertEqual(random_message.get_content().rstrip("\r\n"), "已预留的随机正文")
+
+    @patch("scripts.send_mail.smtplib.SMTP_SSL")
+    def test_actions_custom_inputs_read_from_event_and_masked_without_summary_content(self, smtp):
+        smtp.return_value.send_message.return_value = {}
+        body = "私密正文 100%\n::warning::第二行"
+        subject = "私密主题"
+        with tempfile.TemporaryDirectory() as directory:
+            event = Path(directory) / "event.json"
+            summary = Path(directory) / "summary.md"
+            event.write_text(json.dumps({"inputs": {"custom_subject": subject,
+                                                    "custom_body": body}}), encoding="utf-8")
+            with patch.dict(os.environ, {"MESSAGE_TYPE": "custom", "GITHUB_ACTIONS": "true",
+                                         "GITHUB_EVENT_PATH": str(event), "GITHUB_STEP_SUMMARY": str(summary),
+                                         "CUSTOM_MAIL_BODY": "must not use step env"}):
+                result, output = self.run_main()
+            report = summary.read_text(encoding="utf-8")
+        self.assertEqual(result, 0)
+        self.assertEqual(smtp.return_value.send_message.call_args.args[0].get_content(), body + "\n")
+        self.assertIn("::add-mask::" + subject, output)
+        self.assertIn("::add-mask::私密正文 100%25%0A::warning::第二行", output)
+        self.assertNotIn("\n::warning::", output)
+        self.assertNotIn(body, report)
+        self.assertNotIn(subject, report)
+
+    @patch("scripts.send_mail.smtplib.SMTP_SSL")
+    def test_actions_invalid_event_fails_closed_without_environment_fallback(self, smtp):
+        with tempfile.TemporaryDirectory() as directory:
+            event = Path(directory) / "event.json"
+            for payload in ("not json private-marker", '{}', '{"inputs":null}',
+                            '{"inputs":{"custom_body":["private-marker"]}}'):
+                event.write_text(payload, encoding="utf-8")
+                with patch.dict(os.environ, {"MESSAGE_TYPE": "custom", "GITHUB_ACTIONS": "true",
+                                             "GITHUB_EVENT_PATH": str(event), "MAIL_BODY": "fallback"}):
+                    result, output = self.run_main()
+                self.assertEqual(result, 1)
+                self.assertNotIn("private-marker", output)
+        smtp.assert_not_called()
+
+    def test_success_summary_never_includes_private_content_for_any_message_type(self):
+        for kind in ("test", "random", "custom"):
+            with tempfile.TemporaryDirectory() as directory:
+                summary = Path(directory) / "summary.md"
+                with patch.dict(os.environ, {"MESSAGE_TYPE": kind, "GITHUB_STEP_SUMMARY": str(summary)}):
+                    send_mail.append_send_summary("accepted", {
+                        "subject": "private-title", "body": "private-body sender@qq.com",
+                        "has_image": True, "accepted_at": "2026-10-13T00:00:00Z"})
+                report = summary.read_text(encoding="utf-8")
+            self.assertIn("SMTP 已接受", report)
+            self.assertIn("北京时间", report)
+            for sensitive in ("private-title", "private-body", "sender@qq.com"):
+                self.assertNotIn(sensitive, report)
 
     @patch("scripts.send_mail.smtplib.SMTP_SSL")
     def test_explicit_empty_custom_body_does_not_fall_back_to_reserved_random_content(self, smtp):
@@ -221,7 +274,7 @@ class MailTests(unittest.TestCase):
                 self.assertEqual(self.run_main()[0], 0)
             report = path.read_text()
             self.assertIn("SMTP 已接受", report)
-            self.assertIn("中文 UTF-8 编码正常", report)
+            self.assertNotIn("中文 UTF-8 编码正常", report)
             self.assertIn("北京时间", report)
             for sensitive in ("private-test-authorization", "sender@qq.com", "recipient@example.com"):
                 self.assertNotIn(sensitive, report)

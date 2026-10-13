@@ -256,7 +256,7 @@ def export_for_actions(stable_id, subject, body, env_path):
         marker = "DRAGON_LETTER_END_" + uuid.uuid4().hex
     with open(env_path, "a", encoding="utf-8") as env_file:
         env_file.write(f"MAIL_SUBJECT={subject}\nMAIL_BODY<<{marker}\n{body}\n{marker}\n")
-    print(f"已预留信件 {stable_id}；发送失败或结果不明时也不会再次使用。")
+    print("已预留一封信件；发送失败或结果不明时也不会再次使用。")
 
 
 def main():

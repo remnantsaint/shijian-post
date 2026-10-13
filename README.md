@@ -5,6 +5,8 @@
 自定义 GPT 的安全调用配置见 [GPT Actions 接入说明](docs/gpt-actions.md)。该配置复用 GitHub API，仍需在 GPT 编辑器配置认证；自动上传 GPT 新生成图片尚未打通。
 
 随机来信和小龙娘日常来信会转达带 `给小澪的留言` 标签的 Issue 正文及新评论，复用统一任务账本去重。配置、失败保护和隐私边界见 [Issue 留言转达](docs/issue-relay.md)。
+
+普通 ChatGPT 若有 GitHub `create_file` 写入工具，可通过 [请求文件入口](mail-requests/README.md) 提交一次邮件任务，无需自定义 GPT Action。公开请求不适合隐私内容；仅允许仓库所有者，复用同一账本防重复。
 通过 Python 标准库和 QQ SMTP SSL 发送中文 UTF-8 邮件，支持随机长信、小龙娘来信、自定义内容及图片漫画。
 不需要常驻服务器或第三方 Python 依赖。
 

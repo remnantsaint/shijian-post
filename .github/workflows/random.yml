@@ -91,8 +91,10 @@ jobs:
       contents: read
   tasks:
     name: 统一邮件任务
-    if: (github.event.repository.private == true || (github.actor == github.repository_owner && github.triggering_actor == github.repository_owner)) &&
-      (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.action != '运行代码检查')) && (github.event_name != 'schedule' ||
+    needs: checks
+    if: always() && (needs.checks.result == 'success' || needs.checks.result == 'skipped') &&
+      (github.event.repository.private == true || (github.actor == github.repository_owner && github.triggering_actor == github.repository_owner)) &&
+      (github.event_name == 'push' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.action != '运行代码检查')) && (github.event_name != 'schedule' ||
       (github.event.schedule == '*/5 * * * *' && vars.MAIL_BOT_POLL_MINUTES == '5') || (github.event.schedule == '17 * * * *' && vars.MAIL_BOT_POLL_MINUTES
       != '5'))
     runs-on: ubuntu-24.04

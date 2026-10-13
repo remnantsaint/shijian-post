@@ -318,7 +318,11 @@ def main(argv=None):
     try:
         api=api_from_environment()
         if command=='prepare':
-            selected=prepare(api)
+            if os.environ.get('GITHUB_EVENT_NAME') == 'push':
+                from .file_requests import prepare as prepare_file
+                selected=prepare_file(api)
+            else:
+                selected=prepare(api)
             write_output('execute','true' if selected else 'false')
             write_output('task_id',selected or '')
         elif command=='run':return run(api,os.environ.get('TASK_ID') or 'poll')

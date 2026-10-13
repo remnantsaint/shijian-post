@@ -320,12 +320,23 @@ def main(argv=None):
             for task in TaskStore(api).load()[0]['tasks'].values():
                 print(json.dumps({k:task.get(k) for k in ('id','status','target_at','repeat','expires_at','last_result','accepted_at','cleanup')},ensure_ascii=False))
         else:raise TaskError('未知任务操作。')
-    except TaskError as exc:
+    except (TaskError, send_mail.ConfigurationError) as exc:
         print(f'任务操作停止：{exc}',file=sys.stderr);return 1
     except GitHubAPIError as exc:
         print(f'任务 API 结果未获确认（HTTP {exc.status or "网络错误"}）；不自动重试发送。',file=sys.stderr);return 1
-    except Exception:
-        print('任务处理失败；未输出底层信息，禁止自动重试发送。',file=sys.stderr);return 1
+    except Exception as exc:
+        from .comic_mail import ComicError
+        if isinstance(exc, ComicError):
+            print(f'漫画附件处理停止：{exc}',file=sys.stderr)
+        else:
+            # Exception messages may contain credentials, URLs or mail content.
+            # Only report fixed categories, never raw messages or tracebacks.
+            category = ('参数类型或字段错误' if isinstance(exc, (TypeError, KeyError, AttributeError))
+                        else '参数值或状态格式错误' if isinstance(exc, ValueError)
+                        else '本地文件访问错误' if isinstance(exc, OSError)
+                        else '程序内部异常')
+            print(f'任务处理失败（{category}）；未输出底层信息，禁止自动重试发送。',file=sys.stderr)
+        return 1
     return 0
 
 

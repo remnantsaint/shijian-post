@@ -148,6 +148,23 @@ class ControlTests(unittest.TestCase):
         inputs = self.api.mutations()[0][2]["inputs"]
         self.assertEqual(inputs, {"message_type": "random", "send_delay": "立即发送", "image_path": ""})
 
+    def test_custom_send_preserves_requested_chinese_text(self):
+        self.controller.send("custom", subject="我在这里", body="我在这里")
+        inputs = self.api.mutations()[0][2]["inputs"]
+        self.assertEqual(inputs["custom_body"], "我在这里")
+        self.assertEqual(inputs["custom_subject"], "我在这里")
+        self.assertEqual(inputs["message_type"], "custom")
+
+    def test_invalid_custom_message_does_not_call_api_or_echo_values(self):
+        for subject, body in (("", ""), ("private-value\n", "消息"),
+                              ("", "private-value\x00"), ("", "文" * 100001)):
+            with self.subTest(subject=subject[:20]), self.assertRaises(ControlError) as caught:
+                self.controller.send("custom", subject=subject, body=body)
+            self.assertNotIn("private-value", str(caught.exception))
+        with self.assertRaises(ControlError):
+            self.controller.send("random", body="private-value")
+        self.assertFalse(self.api.calls)
+
     def test_invalid_image_is_rejected_before_network_and_never_echoed(self):
         for value in ("/images/private-value", "images/../private-value", "images/./private-value",
                       "images//private-value", "images\\private-value", "images/private-value\n", "private-value"):

@@ -24,6 +24,8 @@
 2. 选择默认分支，`message_type` 选择 `test`，`send_delay` 选择 `立即发送`，点击 **Run workflow**。
 3. 查看 `Send mail through QQ SMTP` 步骤；成功表示 SMTP 已接受邮件，再检查收件箱和垃圾邮件文件夹。
 4. 选择 `random` 可发送一封随机中文长信，发送前会持久预留文案，防止再次使用。
+5. 选择 `custom` 并填写 `custom_body` 可发送指定文字；`custom_subject` 留空使用默认主题。
+   自定义正文不会消耗随机文案编号，请勿在输入中填写邮箱授权码或其他凭据。
 
 ## 小龙娘来信与文案去重
 
@@ -110,6 +112,7 @@ GitHub 可能延迟或跳过调度，两种模式都不能保证准点，SMTP �
 | --- | --- |
 | 查询当前状态和历史 | `python -m scripts.control_bot status` |
 | 发送一条随机小消息 | `python -m scripts.control_bot send --type random` |
+| 发送指定文字 | `python -m scripts.control_bot send --type custom --body '我在这里'` |
 | 随机等待最多 3 分钟再发送 | `python -m scripts.control_bot send --type random --delay random_3min` |
 | 发送已上传的图片 | `python -m scripts.control_bot send --image images/photo.jpg` |
 | 自定义单次随机计划 | `python -m scripts.control_bot plan --mode once --min 5 --min-unit minutes --max 30 --max-unit days` |

@@ -41,6 +41,97 @@ class MailTests(unittest.TestCase):
             self.assertEqual(parsed.get_content(), message.get_content().replace("\n", "\r\n"))
             self.assertEqual(parsed.get_content_charset(), "utf-8")
 
+    def test_custom_message_preserves_utf8_body_and_default_subject(self):
+        body = "我在这里\n  第二行保留空格。\n"
+        with patch.dict(os.environ, {"MAIL_BODY": body}):
+            message = send_mail.build_message("sender@qq.com", "recipient@example.com", "custom")
+        parsed = BytesParser(policy=policy.default).parsebytes(message.as_bytes())
+        self.assertEqual(parsed["Subject"], "来自邮件机器人的消息")
+        self.assertEqual(parsed.get_content(), body.replace("\n", "\r\n"))
+        self.assertEqual(parsed.get_content_charset(), "utf-8")
+
+    @patch("scripts.send_mail.smtplib.SMTP_SSL")
+    def test_custom_message_success_uses_requested_subject_and_records_summary(self, smtp):
+        smtp.return_value.send_message.return_value = {}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "summary.md"
+            with patch.dict(os.environ, {"MESSAGE_TYPE": "custom", "MAIL_BODY": "我在这里",
+                                         "MAIL_SUBJECT": "中文消息：你好！", "GITHUB_STEP_SUMMARY": str(path)}):
+                result, output = self.run_main()
+            report = path.read_text(encoding="utf-8")
+        self.assertEqual(result, 0)
+        self.assertNotIn("我在这里", output)
+        message = smtp.return_value.send_message.call_args.args[0]
+        self.assertEqual(message["Subject"], "中文消息：你好！")
+        self.assertEqual(message.get_content(), "我在这里\n")
+        self.assertIn("自定义邮件", report)
+        self.assertIn("我在这里", report)
+
+    @patch("scripts.send_mail.smtplib.SMTP_SSL")
+    def test_custom_invalid_subject_rejects_before_smtp_without_echoing_payload(self, smtp):
+        for subject in ("private-payload\r\nBcc: other@example.com", "private-payload\0",
+                        "private-payload\u2028second line", "private-payload" + "文" * 200):
+            environment = dict(os.environ, MESSAGE_TYPE="custom", MAIL_SUBJECT=subject, MAIL_BODY="private-body")
+            with self.subTest(subject=subject), patch("scripts.send_mail.os.environ", environment):
+                result, output = self.run_main()
+            self.assertEqual(result, 1)
+            self.assertIn("配置错误", output)
+            self.assertNotIn("private-payload", output)
+            self.assertNotIn("private-body", output)
+        smtp.assert_not_called()
+
+    @patch("scripts.send_mail.smtplib.SMTP_SSL")
+    def test_custom_invalid_body_rejects_before_smtp_without_echoing_payload(self, smtp):
+        for body in ("", " \n\t", "private-body\0", "private-body" + "文" * 100000,
+                     "private-body\ud800"):
+            environment = dict(os.environ, MESSAGE_TYPE="custom", MAIL_SUBJECT="private-title", MAIL_BODY=body)
+            with self.subTest(body_length=len(body)), patch("scripts.send_mail.os.environ", environment):
+                result, output = self.run_main()
+            self.assertEqual(result, 1)
+            self.assertIn("配置错误", output)
+            self.assertNotIn("private-body", output)
+            self.assertNotIn("private-title", output)
+        smtp.assert_not_called()
+
+    def test_custom_body_accepts_size_limit_and_empty_subject_uses_default(self):
+        with patch.dict(os.environ, {"MAIL_BODY": "文" * 100000, "MAIL_SUBJECT": "   "}):
+            message = send_mail.build_message("sender@qq.com", "recipient@example.com", "custom")
+        self.assertEqual(message["Subject"], "来自邮件机器人的消息")
+        self.assertEqual(len(message.get_content().rstrip("\r\n")), 100000)
+
+    def test_custom_fields_take_precedence_and_do_not_override_reserved_random_letter(self):
+        with patch.dict(os.environ, {
+                "MAIL_SUBJECT": "已预留的随机主题", "MAIL_BODY": "已预留的随机正文",
+                "CUSTOM_MAIL_SUBJECT": "指定主题", "CUSTOM_MAIL_BODY": "我在这里"}):
+            custom = send_mail.build_message("sender@qq.com", "recipient@example.com", "custom")
+            random_message = send_mail.build_message("sender@qq.com", "recipient@example.com", "random")
+        self.assertEqual(custom["Subject"], "指定主题")
+        self.assertEqual(custom.get_content().rstrip("\r\n"), "我在这里")
+        self.assertEqual(random_message["Subject"], "已预留的随机主题")
+        self.assertEqual(random_message.get_content().rstrip("\r\n"), "已预留的随机正文")
+
+    @patch("scripts.send_mail.smtplib.SMTP_SSL")
+    def test_explicit_empty_custom_body_does_not_fall_back_to_reserved_random_content(self, smtp):
+        with patch.dict(os.environ, {"MESSAGE_TYPE": "custom", "MAIL_BODY": "已预留的随机正文",
+                                     "CUSTOM_MAIL_BODY": "", "CUSTOM_MAIL_SUBJECT": ""}):
+            result, output = self.run_main()
+        self.assertEqual(result, 1)
+        self.assertIn("正文不能为空", output)
+        smtp.assert_not_called()
+
+    @patch("scripts.send_mail.smtplib.SMTP_SSL")
+    def test_custom_failure_summary_does_not_echo_requested_content(self, smtp):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "summary.md"
+            with patch.dict(os.environ, {"MESSAGE_TYPE": "custom", "MAIL_BODY": "private-body",
+                                         "MAIL_SUBJECT": "private-title\nInjected", "GITHUB_STEP_SUMMARY": str(path)}):
+                self.assertEqual(self.run_main()[0], 1)
+            report = path.read_text(encoding="utf-8")
+        self.assertIn("配置错误", report)
+        self.assertNotIn("private-title", report)
+        self.assertNotIn("private-body", report)
+        smtp.assert_not_called()
+
     @patch("scripts.send_mail.smtplib.SMTP_SSL")
     def test_success_uses_verified_ssl_and_envelope(self, smtp):
         smtp.return_value.send_message.return_value = {}

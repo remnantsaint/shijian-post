@@ -9,7 +9,18 @@ on:
         options:
           - test
           - random
+          - custom
         default: test
+      custom_subject:
+        description: 自定义邮件主题（仅 custom 使用，可留空）
+        type: string
+        required: false
+        default: ''
+      custom_body:
+        description: 自定义正文（custom 必填，请勿填写邮箱授权码）
+        type: string
+        required: false
+        default: ''
       send_delay:
         description: 发送时机
         type: choice
@@ -64,5 +75,7 @@ jobs:
           QQ_SMTP_AUTH_CODE: ${{ secrets.QQ_SMTP_AUTH_CODE }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
           MESSAGE_TYPE: ${{ inputs.message_type || 'random' }}
+          CUSTOM_MAIL_SUBJECT: ${{ inputs.custom_subject }}
+          CUSTOM_MAIL_BODY: ${{ inputs.custom_body }}
           IMAGE_PATH: ${{ inputs.image_path }}
         run: python scripts/send_mail.py

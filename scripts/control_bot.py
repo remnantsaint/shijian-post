@@ -96,16 +96,28 @@ class Controller:
             pass
         self.output(make_report(self.api, self.repo, check_interval=interval))
 
-    def send(self, message_type="random", delay="immediate", image=""):
-        if message_type not in ("test", "random") or delay not in DELAYS:
+    def send(self, message_type="random", delay="immediate", image="", *, subject="", body=""):
+        if message_type not in ("test", "random", "custom") or delay not in DELAYS:
             raise ControlError("邮件类型或发送时机无效；未提交发送。")
+        if message_type == "custom":
+            if (not isinstance(body, str) or not body.strip() or len(body) > 100_000
+                    or "\x00" in body):
+                raise ControlError("自定义正文必须非空且不超过 100000 字符，不能包含空字符；未提交发送。")
+            if (not isinstance(subject, str) or len(subject) > 200
+                    or any(ord(char) < 32 or ord(char) == 127 for char in subject)):
+                raise ControlError("自定义主题必须是长度合适的单行文本；未提交发送。")
+        elif subject or body:
+            raise ControlError("自定义主题和正文仅用于 custom 邮件；未提交发送。")
         path = image_path(image)
         branch = self.default_branch()
-        self.dispatch(SEND_WORKFLOW, branch, {
+        inputs = {
             "message_type": message_type,
             "send_delay": DELAYS[delay],
             "image_path": path,
-        })
+        }
+        if message_type == "custom":
+            inputs.update(custom_subject=subject, custom_body=body)
+        self.dispatch(SEND_WORKFLOW, branch, inputs)
         self.output("发送请求已提交；工作流尚未确认完成，不能据此确认 SMTP 接受或邮件投递。请查看 status 和收件箱；未自动重试。")
 
     def plan(self, mode, min_interval, min_unit, max_interval, max_unit):
@@ -207,9 +219,11 @@ def build_parser():
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("status", help="只读查询状态和历史")
     send = commands.add_parser("send", help="提交一次发送请求")
-    send.add_argument("--type", dest="message_type", choices=("test", "random"), default="random")
+    send.add_argument("--type", dest="message_type", choices=("test", "random", "custom"), default="random")
     send.add_argument("--delay", choices=tuple(DELAYS), default="immediate")
     send.add_argument("--image", default="", help="可选，仓库 images/ 内的图片路径")
+    send.add_argument("--subject", default="", help="自定义主题，仅 custom 使用")
+    send.add_argument("--body", default="", help="自定义正文，custom 必填")
     plan = commands.add_parser("plan", help="安排单次或循环随机计划")
     plan.add_argument("--mode", choices=tuple(MODES), required=True)
     plan.add_argument("--min", dest="min_interval", required=True)
@@ -233,7 +247,8 @@ def main(argv=None):
         if command == "status":
             controller.status()
         elif command == "send":
-            controller.send(args.message_type, args.delay, args.image)
+            controller.send(args.message_type, args.delay, args.image,
+                            subject=args.subject, body=args.body)
         elif command == "plan":
             controller.plan(args.mode, args.min_interval, args.min_unit,
                             args.max_interval, args.max_unit)

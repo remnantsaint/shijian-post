@@ -19,6 +19,8 @@ else:
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_CUSTOM_BODY_CHARACTERS = 100000
+MAX_CUSTOM_SUBJECT_CHARACTERS = 200
 
 
 class ConfigurationError(ValueError):
@@ -45,6 +47,25 @@ def address(name):
     return value
 
 
+def custom_content():
+    subject = os.environ.get("CUSTOM_MAIL_SUBJECT", os.environ.get("MAIL_SUBJECT", ""))
+    body = os.environ.get("CUSTOM_MAIL_BODY", os.environ.get("MAIL_BODY", ""))
+    if (len(subject) > MAX_CUSTOM_SUBJECT_CHARACTERS
+            or any(not character.isprintable() for character in subject)):
+        raise ConfigurationError("自定义邮件主题必须是单行文本，且不能超过 200 个字符")
+    subject = subject if subject.strip() else "来自邮件机器人的消息"
+    if not body.strip():
+        raise ConfigurationError("自定义邮件正文不能为空")
+    if len(body) > MAX_CUSTOM_BODY_CHARACTERS or "\0" in body:
+        raise ConfigurationError("自定义邮件正文不能包含空字符，且不能超过 100000 个字符")
+    try:
+        subject.encode("utf-8")
+        body.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ConfigurationError("自定义邮件内容必须是合法的 UTF-8 文本") from None
+    return subject, body
+
+
 def build_message(sender, recipient, kind):
     message = EmailMessage(policy=policy.SMTP)
     message["From"] = sender
@@ -63,8 +84,11 @@ def build_message(sender, recipient, kind):
             subject = "随机信件编码预览"
             body = "这是一段用于离线编码检查的随机信件预览。"
         message["Subject"] = subject
+    elif kind == "custom":
+        subject, body = custom_content()
+        message["Subject"] = subject
     else:
-        raise ConfigurationError("MESSAGE_TYPE 仅支持 test 或 random")
+        raise ConfigurationError("MESSAGE_TYPE 仅支持 test、random 或 custom")
     message.set_content(body, charset="utf-8")
     return message
 
@@ -166,7 +190,7 @@ def append_send_summary(status, result=None, explanation=""):
         return
     labels = {"accepted": "SMTP 已接受", "failed": "发送失败或未发送", "uncertain": "发送结果不确定，需核验"}
     kind = os.environ.get("MESSAGE_TYPE", "test")
-    kind = {"test": "测试邮件", "random": "随机小消息"}.get(kind, "配置无效")
+    kind = {"test": "测试邮件", "random": "随机小消息", "custom": "自定义邮件"}.get(kind, "配置无效")
     recorded_at = parse_utc(result["accepted_at"]) if result else utc_now()
     time_label = "SMTP 接受时间" if result else "失败检查时间"
     summary = (

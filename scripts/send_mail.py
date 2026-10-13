@@ -13,9 +13,9 @@ from email.utils import format_datetime, make_msgid
 from pathlib import Path
 
 if __package__:
-    from .time_utils import BEIJING, format_beijing, format_utc, parse_utc, utc_now
+    from .time_utils import BEIJING, format_beijing, format_utc, parse_utc, utc_now, letter_with_time
 else:
-    from time_utils import BEIJING, format_beijing, format_utc, parse_utc, utc_now
+    from time_utils import BEIJING, format_beijing, format_utc, parse_utc, utc_now, letter_with_time
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
@@ -91,7 +91,8 @@ def build_message(sender, recipient, kind):
     message = EmailMessage(policy=policy.SMTP)
     message["From"] = sender
     message["To"] = recipient
-    message["Date"] = format_datetime(utc_now().astimezone(BEIJING))
+    written_at = utc_now()
+    message["Date"] = format_datetime(written_at.astimezone(BEIJING))
     message["Message-ID"] = make_msgid(domain="qq.com")
     if kind == "test":
         message["Subject"] = "邮件机器人测试：你好！"
@@ -110,7 +111,7 @@ def build_message(sender, recipient, kind):
         message["Subject"] = subject
     else:
         raise ConfigurationError("MESSAGE_TYPE 仅支持 test、random 或 custom")
-    message.set_content(body, charset="utf-8")
+    message.set_content(letter_with_time(body, written_at), charset="utf-8")
     return message
 
 

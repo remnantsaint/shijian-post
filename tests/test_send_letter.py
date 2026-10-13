@@ -103,6 +103,8 @@ class LetterTests(unittest.TestCase):
         date = parsedate_to_datetime(str(message["Date"]))
         self.assertEqual(date, submission)
         self.assertEqual(date.utcoffset(), timedelta(hours=8))
+        self.assertTrue(message.get_content().endswith(
+            "写信时间（北京时间 UTC+8）：2026-12-31 23:59:59\n"))
         self.assertIn("SMTP 接受时间", report)
         self.assertIn("2027-01-01 00:00:01", report)
         self.assertIn("无（0 张）", report)

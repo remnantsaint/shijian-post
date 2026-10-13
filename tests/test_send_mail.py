@@ -48,7 +48,9 @@ class MailTests(unittest.TestCase):
             message = send_mail.build_message("sender@qq.com", "recipient@example.com", "custom")
         parsed = BytesParser(policy=policy.default).parsebytes(message.as_bytes())
         self.assertEqual(parsed["Subject"], "来自邮件机器人的消息")
-        self.assertEqual(parsed.get_content(), body.replace("\n", "\r\n"))
+        self.assertEqual(parsed.get_content().split("\r\n\r\n写信时间", 1)[0],
+                         body.replace("\n", "\r\n"))
+        self.assertIn("写信时间（北京时间 UTC+8）：", parsed.get_content())
         self.assertEqual(parsed.get_content_charset(), "utf-8")
 
     @patch("scripts.send_mail.smtplib.SMTP_SSL")
@@ -64,7 +66,7 @@ class MailTests(unittest.TestCase):
         self.assertNotIn("我在这里", output)
         message = smtp.return_value.send_message.call_args.args[0]
         self.assertEqual(message["Subject"], "中文消息：你好！")
-        self.assertEqual(message.get_content(), "我在这里\n")
+        self.assertEqual(message.get_content().split("\n\n写信时间", 1)[0], "我在这里")
         self.assertIn("自定义邮件", report)
         self.assertNotIn("我在这里", report)
         self.assertNotIn("中文消息：你好！", report)
@@ -99,7 +101,8 @@ class MailTests(unittest.TestCase):
         with patch.dict(os.environ, {"MAIL_BODY": "文" * 100000, "MAIL_SUBJECT": "   "}):
             message = send_mail.build_message("sender@qq.com", "recipient@example.com", "custom")
         self.assertEqual(message["Subject"], "来自邮件机器人的消息")
-        self.assertEqual(len(message.get_content().rstrip("\r\n")), 100000)
+        self.assertEqual(len(message.get_content().replace("\r\n", "\n").split(
+            "\n\n写信时间", 1)[0]), 100000)
 
     def test_custom_fields_take_precedence_and_do_not_override_reserved_random_letter(self):
         with patch.dict(os.environ, {
@@ -108,9 +111,9 @@ class MailTests(unittest.TestCase):
             custom = send_mail.build_message("sender@qq.com", "recipient@example.com", "custom")
             random_message = send_mail.build_message("sender@qq.com", "recipient@example.com", "random")
         self.assertEqual(custom["Subject"], "指定主题")
-        self.assertEqual(custom.get_content().rstrip("\r\n"), "我在这里")
+        self.assertEqual(custom.get_content().split("\n\n写信时间", 1)[0], "我在这里")
         self.assertEqual(random_message["Subject"], "已预留的随机主题")
-        self.assertEqual(random_message.get_content().rstrip("\r\n"), "已预留的随机正文")
+        self.assertEqual(random_message.get_content().split("\n\n写信时间", 1)[0], "已预留的随机正文")
 
     @patch("scripts.send_mail.smtplib.SMTP_SSL")
     def test_actions_custom_inputs_read_from_event_and_masked_without_summary_content(self, smtp):
@@ -128,7 +131,8 @@ class MailTests(unittest.TestCase):
                 result, output = self.run_main()
             report = summary.read_text(encoding="utf-8")
         self.assertEqual(result, 0)
-        self.assertEqual(smtp.return_value.send_message.call_args.args[0].get_content(), body + "\n")
+        self.assertEqual(smtp.return_value.send_message.call_args.args[0].get_content().split(
+            "\n\n写信时间", 1)[0], body)
         self.assertIn("::add-mask::" + subject, output)
         self.assertIn("::add-mask::私密正文 100%25%0A::warning::第二行", output)
         self.assertNotIn("\n::warning::", output)
@@ -323,6 +327,8 @@ class MailTests(unittest.TestCase):
         self.assertEqual(date.utcoffset(), timedelta(hours=8))
         self.assertEqual(date.strftime('%Y-%m-%d %H:%M:%S'), '2027-01-01 00:00:00')
         self.assertEqual(send_mail.parse_utc(result['accepted_at']), acceptance)
+        self.assertTrue(message.get_content().endswith(
+            '写信时间（北京时间 UTC+8）：2026-12-31 23:59:59\n'))
 
     @patch("scripts.send_mail.smtplib.SMTP_SSL")
     def test_smtp_time_output_preserves_success_and_does_not_expose_credentials(self, smtp):

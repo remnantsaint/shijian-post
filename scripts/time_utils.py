@@ -34,3 +34,8 @@ def format_utc(value):
 
 def format_beijing(value):
     return aware(value).astimezone(BEIJING).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def letter_with_time(body, written_at):
+    """Append the actual composition time; callers keep it out of dedup hashes."""
+    return body + "\n\n" + f"写信时间（北京时间 UTC+8）：{format_beijing(written_at)}"

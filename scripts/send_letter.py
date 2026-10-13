@@ -11,10 +11,10 @@ from email.utils import format_datetime, formataddr, make_msgid
 
 if __package__:
     from .send_mail import ConfigurationError, address, required, failure_details, add_image_attachment
-    from .time_utils import BEIJING, format_beijing, format_utc, parse_utc, utc_now
+    from .time_utils import BEIJING, format_beijing, format_utc, parse_utc, utc_now, letter_with_time
 else:
     from send_mail import ConfigurationError, address, required, failure_details, add_image_attachment
-    from time_utils import BEIJING, format_beijing, format_utc, parse_utc, utc_now
+    from time_utils import BEIJING, format_beijing, format_utc, parse_utc, utc_now, letter_with_time
 
 
 MAX_BODY_CHARS = 100_000
@@ -78,9 +78,10 @@ def send(*, metadata=None):
     message["From"] = formataddr((from_name, sender))
     message["To"] = recipient
     message["Subject"] = subject
-    message["Date"] = format_datetime(utc_now().astimezone(BEIJING))
+    written_at = utc_now()
+    message["Date"] = format_datetime(written_at.astimezone(BEIJING))
     message["Message-ID"] = make_msgid(domain="qq.com")
-    message.set_content(body, charset="utf-8")
+    message.set_content(letter_with_time(body, written_at), charset="utf-8")
 
     for image_path in image_paths_from_env():
         add_image_attachment(message, image_path)

@@ -14,7 +14,7 @@ on:
       - scripts/send_letter.py
       - scripts/reserve_letter.py
   workflow_run:
-    workflows: [QQ Mail Bot, Random Mail Scheduler, 小龙娘来信]
+    workflows: [QQ Mail Bot（手动发送邮件）, Random Mail Scheduler（随机定时发送）, 小龙娘来信]
     types: [completed]
 
 permissions:
@@ -37,7 +37,7 @@ jobs:
         github.actor == github.repository_owner &&
         github.triggering_actor == github.repository_owner)) && (
       github.event_name != 'workflow_run' ||
-      github.event.workflow_run.name != 'Random Mail Scheduler' ||
+      github.event.workflow_run.name != 'Random Mail Scheduler（随机定时发送）' ||
       github.event.workflow_run.event != 'schedule' ||
       (github.event.workflow_run.conclusion != 'success' &&
        github.event.workflow_run.conclusion != 'skipped'))

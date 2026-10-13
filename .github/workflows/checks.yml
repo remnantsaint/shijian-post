@@ -1,4 +1,4 @@
-name: Mail Bot Checks
+name: Mail Bot Checks（代码检查，不发送邮件）
 
 on:
   push:

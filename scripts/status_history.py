@@ -123,7 +123,7 @@ def history_sort_key(entry):
 
 
 def read_main_runs(api, repo):
-    return read_workflow_runs(api, repo, "main.yml", "QQ Mail Bot")
+    return read_workflow_runs(api, repo, "main.yml", "QQ Mail Bot（手动发送邮件）")
 
 
 def read_workflow_runs(api, repo, filename, label, optional=False):
@@ -223,7 +223,7 @@ def read_random_state(api, repo):
                             "time_source": "SMTP 接受" if source == "smtp_accepted" else
                                            "状态记录" if source == "state_recorded" else
                                            "状态记录（旧记录）",
-                            "kind": "随机计时", "workflow": "Random Mail Scheduler",
+                            "kind": "随机计时", "workflow": "Random Mail Scheduler（随机定时发送）",
                             "result": "SMTP 已接受" if item["status"] == "accepted"
                                       else "结果不确定；检查邮箱和运行摘要"})
         return workflow, state, entries
@@ -286,7 +286,7 @@ def make_report(api, repo, now=None, check_interval="60"):
              f"查询开始：北京时间 {beijing(query_started)}；"
              f"查询完成：北京时间 {beijing(query_completed)}。", "",
              "本报告只读，不发送邮件。SMTP 接受不等于最终投递成功。", "",
-             f"QQ Mail Bot 工作流：{STATES.get(workflow.get('state'), '未知')}。"]
+             f"QQ Mail Bot（手动发送邮件） 工作流：{STATES.get(workflow.get('state'), '未知')}。"]
     if manual:
         latest = manual[0]
         lines.append(f"最近一次主工作流：{latest['result']}；"
@@ -323,7 +323,7 @@ def make_report(api, repo, now=None, check_interval="60"):
                      f"({run_url(repo, entry['run_id'], entry['run_attempt'])}) |")
     if not history:
         lines.append("| — | — | — | 尚无记录 | — | — |")
-    lines += ["", "QQ Mail Bot 的摘要含正文及图片有无；长信摘要只记录发送结果、时间和附件数量，正文请在邮箱查看。",
+    lines += ["", "新邮件摘要只记录发送结果、时间和附件信息，不保存主题或正文；旧摘要可能含正文，正文请在邮箱查看。",
               "时间来源区分 SMTP 接受、发送步骤结束、任务结束、运行更新时间和状态记录；均不代表实际收件时间。",
               "旧重跑缺少本次结束时间时显示时间未知，不使用其他重跑的时间。",
               "旧记录不会补出正文。历史受 GitHub 运行记录保留期限限制，快照不会自动刷新。", ""]

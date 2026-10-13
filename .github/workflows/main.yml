@@ -1,4 +1,4 @@
-name: QQ Mail Bot
+name: QQ Mail Bot（手动发送邮件）
 
 on:
   workflow_dispatch:

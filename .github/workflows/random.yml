@@ -1,4 +1,4 @@
-name: Random Mail Scheduler
+name: Random Mail Scheduler（随机定时发送）
 
 on:
   workflow_dispatch:

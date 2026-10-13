@@ -269,9 +269,11 @@
             "schema": {
               "type": "integer",
               "enum": [
-                5
-              ]
-            }
+                1
+              ],
+              "default": 1
+            },
+            "description": "固定查询 1 条，避免 GPT Action 响应超过大小限制。"
           }
         ]
       }

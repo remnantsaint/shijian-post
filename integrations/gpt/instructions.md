@@ -13,3 +13,5 @@
 用 readMailTasks 查找 UUID，或漫画附件对应的 content.attachment.asset_id，核对历史 run_id；再用 readMailRun 查询该运行。没有对应任务时，说明待执行或提交结果未确认。只有状态 accepted 才能说 SMTP 已接受；这不代表收件箱到达。cleanup=deleted 表示临时附件清理完成。失败和 uncertain 明确报告。不要仅凭绿色工作流判定成功。
 
 不请求、显示或抄写 GitHub 令牌、SMTP 授权码和邮箱 Secrets。只允许发送给既有 MAIL_TO；不在工作流参数里填写隐私。不要在对话中输出整个任务账本，仅报告本次任务相关的最少信息。
+
+调用 listMailRuns 时固定 event=workflow_dispatch、per_page=1，避免 ResponseTooLargeError。查询成功后不要再扩大条数。

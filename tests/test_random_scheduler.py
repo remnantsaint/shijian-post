@@ -5,6 +5,7 @@ import io
 import json
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 from scripts.github_api import GitHubAPIError
 from scripts.random_scheduler import (
@@ -186,6 +187,15 @@ class SchedulerTests(unittest.TestCase):
         api = MockAPI()
         self.assertIsNone(self.scheduler(api).prepare("poll"))
         self.assertEqual(api.events, ["send_due:false"])
+
+    def test_unified_close_does_not_disable_other_tools(self):
+        api = MockAPI(state_at())
+        scheduler = Scheduler(api, "99", now=lambda: NOW)
+        with patch.dict("os.environ", {"MAIL_BOT_UNIFIED": "true"}):
+            scheduler.prepare("disable")
+        self.assertFalse(api.state["enabled"])
+        self.assertEqual(api.state["state"], "disabled")
+        self.assertNotIn("disable", api.events)
 
     def test_explicit_close_reuses_existing_claim_history_without_retry(self):
         api = MockAPI(state_at())

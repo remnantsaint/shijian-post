@@ -18,6 +18,7 @@ from scripts.time_utils import format_beijing, format_utc, parse_utc, utc_now
 STATE_BRANCH = "mail-bot-state"
 STATE_PATH = ".mail-bot/random.json"
 WORKFLOW_FILE = "random.yml"
+UNIFIED_WORKFLOW_NAME = "邮件机器人（统一入口）"
 MAX_MINUTES = 90 * 24 * 60
 HISTORY_LIMIT = 100
 
@@ -211,11 +212,14 @@ class Scheduler:
         self.output = output or (lambda due: None)
 
     def disable_workflow(self):
+        if os.environ.get("MAIL_BOT_UNIFIED") == "true":
+            print("随机邮件计划已关闭，历史保留；统一入口仍可手动发送、查询与检查。")
+            return
         self.api.request("PUT", f"/repos/{self.api.repo}/actions/workflows/{WORKFLOW_FILE}/disable")
         print("随机计划及后台检查已关闭，工作流已停用；历史保留。")
 
     def keep_audit_enabled(self):
-        print("目前没有可执行的邮件计划；保留按配置频率运行的后台审计。选择关闭计划可停止后续检查。")
+        print("目前没有可执行的邮件计划；保留按配置频率运行的后台检查，不发送邮件。")
 
     def next_time(self, lower, upper):
         return format_time(self.now() + timedelta(minutes=self.choose_delay(lower, upper)))

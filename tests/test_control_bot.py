@@ -465,6 +465,50 @@ class ControlTests(unittest.TestCase):
             self.assertEqual(main(["status"]), 0)
         api_constructor.assert_called_once_with(self.api.repo, "private-token")
 
+    def test_unified_send_uses_chinese_action_and_preserves_requested_text(self):
+        original = self.api.request
+        def request(method, path, data=None):
+            result = original(method, path, data)
+            if path.endswith('/workflows/random.yml'):
+                result['name'] = '邮件机器人（统一入口）'
+            return result
+        with patch.object(self.api, 'request', side_effect=request):
+            self.controller.send('custom', subject='标题', body='我在这里')
+        mutations = self.api.mutations()
+        self.assertEqual(len(mutations), 1)
+        self.assertTrue(mutations[0][1].endswith('/workflows/random.yml/dispatches'))
+        self.assertEqual(mutations[0][2]['inputs']['action'], '发送自定义邮件')
+        self.assertEqual(mutations[0][2]['inputs']['custom_body'], '我在这里')
+        self.assertNotIn('message_type', mutations[0][2]['inputs'])
+
+    def test_unified_pause_preserves_manual_entry_and_history(self):
+        api = FakeAPI(plan_state())
+        api.workflow_state = 'active'
+        original = api.request
+        def request(method, path, data=None):
+            result = original(method, path, data)
+            if path.endswith('/workflows/random.yml'):
+                result['name'] = '邮件机器人（统一入口）'
+            return result
+        with patch.object(api, 'request', side_effect=request):
+            Controller(api, self.output.append).pause()
+        self.assertFalse(api.state['enabled'])
+        self.assertEqual(api.workflow_state, 'active')
+        self.assertEqual(len(api.mutations()), 1)
+        self.assertNotIn('/disable', api.mutations()[0][1])
+
+    def test_unified_code_checks_cannot_be_cancelled_as_mail(self):
+        self.api.run.update(workflow_id=102, event='push', display_title='代码检查')
+        original = self.api.request
+        def request(method, path, data=None):
+            result = original(method, path, data)
+            if path.endswith('/workflows/random.yml'):
+                result['name'] = '邮件机器人（统一入口）'
+            return result
+        with patch.object(self.api, 'request', side_effect=request), self.assertRaises(ControlError):
+            self.controller.cancel_run(42)
+        self.assertFalse(self.api.mutations())
+
     def test_argparse_errors_never_echo_invalid_arguments(self):
         cases = [["send", "--type", "private-secret"], ["private-secret"],
                  ["send", "--private-secret"], ["plan", "--mode", "private-secret"],

@@ -71,6 +71,24 @@ def plan(history=()):
 
 
 class StatusTests(unittest.TestCase):
+    def test_unified_history_excludes_status_checks_and_recognizes_mail_steps(self):
+        api = FakeAPI()
+        api.responses[f'{BASE}/actions/workflows/main.yml'] = APIError(404)
+        api.responses[f'{BASE}/actions/workflows/random.yml'] = {
+            'state': 'active', 'name': '邮件机器人（统一入口）'}
+        mail = dict(run(70), display_title='发送随机来信')
+        query = dict(run(71), display_title='查看状态')
+        check = dict(run(72), display_title='代码检查', event='push')
+        api.responses[f'{BASE}/actions/workflows/random.yml/runs?per_page=100&event=workflow_dispatch'] = {
+            'workflow_runs': [mail, query, check]}
+        api.jobs(70, [{'name': status.SEND_STEP, 'conclusion': 'success',
+                       'completed_at': '2026-10-12T04:05:00Z'}])
+        report = status.make_report(api, REPO, now=NOW)
+        self.assertIn('SMTP 已接受', report)
+        self.assertIn('运行 #70', report)
+        self.assertNotIn('运行 #71', report)
+        self.assertNotIn('运行 #72', report)
+        self.assertNotIn('旧版环境测试', report)
     def test_letter_smtp_outcomes_use_real_steps_not_overall_result(self):
         for name in status.SEND_STEPS:
             for conclusion, expected in (("success", "SMTP 已接受"),

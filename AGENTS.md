@@ -13,7 +13,7 @@ When the user explicitly requests an operation, use `python -m scripts.control_b
 - A successful workflow dispatch confirms submission, not execution or delivery. Inspect the matching run before claiming success. Do not retry a dispatch whose result is uncertain.
 - Cancelling a run cannot recall a message already accepted by SMTP. Check the send result and inbox before arranging another send.
 - Long random plans persist in `mail-bot-state`. Preserve existing plans and history. Paused or uncertain sends must not be retried automatically.
-- Completed or paused plans can keep background auditing enabled without sending. An explicit pause closes the plan and disables future background checks.
+- Completed or paused plans can keep background auditing enabled without sending. In the unified workflow, pause closes only the sending plan and preserves the send/status/check entry points. It must not disable the entire workflow. Scheduled checks may continue without sending.
 - Keep legacy letter digest snapshots immutable. Do not regenerate them from changed material arrays or reset the used-letter ledger. Only definite ledger conflicts may be retried; uncertain writes and SMTP sends must not be retried automatically.
 - Use actual runtime timestamps and Beijing time (UTC+8) for user-facing dates. Keep target time, SMTP acceptance, query time and delivery distinct.
 

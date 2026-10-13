@@ -11,7 +11,7 @@ import sys
 
 from scripts.github_api import GitHubAPI, GitHubAPIError
 from scripts.random_scheduler import (
-    SchedulerError, StateStore, closed_plan_state, interval_minutes, validate_bounds,
+    SchedulerError, StateStore, closed_plan_state, interval_minutes, validate_bounds, UNIFIED_WORKFLOW_NAME,
 )
 from scripts.status_history import ReportError, make_report
 
@@ -116,7 +116,14 @@ class Controller:
         }
         if message_type == "custom":
             inputs.update(custom_subject=subject, custom_body=body)
-        self.dispatch(SEND_WORKFLOW, branch, inputs)
+        workflow = self.api.request("GET", f"{self.prefix}/actions/workflows/{PLAN_WORKFLOW}")
+        if isinstance(workflow, dict) and workflow.get("name") == UNIFIED_WORKFLOW_NAME:
+            inputs.pop("message_type")
+            inputs["action"] = {"test": "发送测试邮件", "random": "发送随机来信",
+                                "custom": "发送自定义邮件"}[message_type]
+            self.dispatch(PLAN_WORKFLOW, branch, inputs)
+        else:
+            self.dispatch(SEND_WORKFLOW, branch, inputs)
         self.output("发送请求已提交；工作流尚未确认完成，不能据此确认 SMTP 接受或邮件投递。请查看 status 和收件箱；未自动重试。")
 
     def plan(self, mode, min_interval, min_unit, max_interval, max_unit):
@@ -155,6 +162,17 @@ class Controller:
         # to dispatch its closure. The SHA guards concurrent claims/finalization.
         workflow = self.api.request("GET", f"{self.prefix}/actions/workflows/{PLAN_WORKFLOW}")
         workflow_state = workflow.get("state") if isinstance(workflow, dict) else None
+        unified = isinstance(workflow, dict) and workflow.get("name") == UNIFIED_WORKFLOW_NAME
+        if unified:
+            if workflow_state not in {"active", "disabled_manually", "disabled_inactivity"}:
+                raise ControlError("无法确认统一入口状态；未修改计划，请查看 status。")
+            if actual_plan:
+                try:
+                    store.save(closed_plan_state(state), "Disable random mail plan from assistant")
+                except GitHubAPIError:
+                    raise ControlError("计划关闭状态未获确认；未停用统一入口或自动重试，请查看 status 和收件箱。") from None
+            self.output("随机计划已关闭，历史保留；统一入口仍可手动发送和查询。已开始的邮件仍可能发出，请核对收件箱。")
+            return
         if workflow_state == "active":
             self.api.request("PUT", f"{self.prefix}/actions/workflows/{PLAN_WORKFLOW}/disable")
         elif workflow_state not in {"disabled_manually", "disabled_inactivity"}:
@@ -181,11 +199,19 @@ class Controller:
                 or repository["full_name"].casefold() != self.repo.casefold()):
             raise ControlError("运行不属于当前仓库；未提交取消。")
         allowed = set()
+        unified_id = None
         for workflow in (SEND_WORKFLOW, PLAN_WORKFLOW):
-            data = self.api.request("GET", f"{self.prefix}/actions/workflows/{workflow}")
+            try:
+                data = self.api.request("GET", f"{self.prefix}/actions/workflows/{workflow}")
+            except GitHubAPIError as exc:
+                if workflow == SEND_WORKFLOW and exc.status == 404:
+                    continue
+                raise
             if not isinstance(data, dict):
                 raise ControlError("无法确认邮件工作流身份；未提交取消。")
             allowed.add(positive_run_id(data.get("id")))
+            if data.get("name") == UNIFIED_WORKFLOW_NAME:
+                unified_id = positive_run_id(data.get("id"))
         try:
             letter = self.api.request(
                 "GET", f"{self.prefix}/actions/workflows/{LETTER_WORKFLOW}")
@@ -198,6 +224,10 @@ class Controller:
             allowed.add(positive_run_id(letter.get("id")))
         if type(run.get("workflow_id")) is not int or run["workflow_id"] not in allowed:
             raise ControlError("仅允许取消邮件发送、来信或随机计划工作流；未提交取消。")
+        if run["workflow_id"] == unified_id and run.get("event") != "schedule":
+            if run.get("display_title") not in {"发送测试邮件", "发送随机来信", "发送小龙娘来信",
+                                               "发送自定义邮件", "安排一次", "循环随机发送", "关闭计划"}:
+                raise ControlError("统一入口的代码检查或只读查询不属于邮件发送；未提交取消。")
         if run.get("status") == "completed":
             self.output("该运行已结束，没有提交取消或重跑。邮件仍可能已被 SMTP 接受，请查看历史和收件箱。")
             return

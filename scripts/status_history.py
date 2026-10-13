@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .github_api import GitHubAPI, GitHubAPIError
 from .time_utils import UTC, format_beijing, format_utc, parse_utc, utc_now
+from .random_scheduler import UNIFIED_WORKFLOW_NAME
 
 
 SEND_STEP = "Send mail through QQ SMTP"
@@ -123,20 +124,26 @@ def history_sort_key(entry):
 
 
 def read_main_runs(api, repo):
-    return read_workflow_runs(api, repo, "main.yml", "QQ Mail Bot（手动发送邮件）")
+    return read_workflow_runs(api, repo, "main.yml", "QQ Mail Bot（手动发送邮件）", optional=True)
 
 
-def read_workflow_runs(api, repo, filename, label, optional=False):
+def read_workflow_runs(api, repo, filename, label, optional=False, send_only=False):
     path = f"/repos/{repo}/actions/workflows/{filename}"
     workflow = optional_read(api, path) if optional else api.request("GET", path)
     if workflow is None and optional:
         return None, []
-    response = api.request("GET", f"{path}/runs?per_page=20")
+    query = "per_page=100&event=workflow_dispatch" if send_only else "per_page=20"
+    response = api.request("GET", f"{path}/runs?{query}")
     if not isinstance(workflow, dict) or not isinstance(response, dict):
         raise ReportError("邮件工作流响应格式无效，无法确认状态。")
     runs = response.get("workflow_runs")
     if not isinstance(runs, list):
         raise ReportError("邮件工作流运行列表无效，无法确认状态。")
+    if send_only:
+        # Unified status/CI/control runs are never interpreted as mail attempts.
+        runs = [run for run in runs if run.get("event") == "workflow_dispatch"
+                and run.get("display_title") in {"发送测试邮件", "发送随机来信",
+                                                   "发送小龙娘来信", "发送自定义邮件"}]
     entries = []
     recent_runs = sorted(runs[:20], key=lambda run: timestamp(
         run.get("updated_at") or run.get("created_at")), reverse=True)
@@ -280,13 +287,17 @@ def make_report(api, repo, now=None, check_interval="60"):
     letter_workflow, letters = read_workflow_runs(
         api, repo, LETTER_WORKFLOW, LETTER_LABEL, optional=True)
     random_workflow, state, random_history = read_random_state(api, repo)
+    unified = isinstance(random_workflow, dict) and random_workflow.get("name") == UNIFIED_WORKFLOW_NAME
+    if unified:
+        _, current = read_workflow_runs(api, repo, "random.yml", UNIFIED_WORKFLOW_NAME, send_only=True)
+        manual = sorted(manual + current, key=history_sort_key, reverse=True)
     query_completed = query_started if now is not None else utc_now()
     lines = ["# 邮件机器人状态与发送历史", "",
              f"仓库：{markdown(repo)}。",
              f"查询开始：北京时间 {beijing(query_started)}；"
              f"查询完成：北京时间 {beijing(query_completed)}。", "",
              "本报告只读，不发送邮件。SMTP 接受不等于最终投递成功。", "",
-             f"QQ Mail Bot（手动发送邮件） 工作流：{STATES.get(workflow.get('state'), '未知')}。"]
+             f"主入口工作流：{STATES.get((random_workflow if unified else workflow or {}).get('state'), '未知')}。"]
     if manual:
         latest = manual[0]
         lines.append(f"最近一次主工作流：{latest['result']}；"

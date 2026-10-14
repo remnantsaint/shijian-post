@@ -493,13 +493,9 @@ select {
   padding-top: 16px;
 }
 .editor-footer {
-  border: 1px solid #e2e7dc;
-  border-top: 0;
-  background: #fdfefb;
-  border-radius: 0 0 7px 7px;
   display: flex;
   justify-content: space-between;
-  padding: 10px 13px;
+  padding: 10px 2px;
   font-size: 9px;
   color: #b1baa4;
   gap: 10px;

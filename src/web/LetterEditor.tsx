@@ -247,9 +247,6 @@ export default function LetterEditor({
           sync();
         }}
       />
-      <p className="field-note">
-        可直接粘贴图片，也可在光标位置选图插入。最多 3 张，压缩后合计不超过 1 MB。
-      </p>
       {error && (
         <p role="alert" className="image-error">
           {error}

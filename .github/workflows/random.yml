@@ -10,25 +10,28 @@ run-name: ${{ github.event_name == 'schedule' && '定时检查' || github.event_
         options:
         - 查看状态
         - 发送测试邮件
-        - 发送随机来信
-        - 发送小龙娘来信
-        - 发送自定义邮件
+        - 发送邮件
         - 发送漫画邮件
-        - 安排一次
-        - 循环随机发送
+        - 循环发送
         - 关闭计划
-        - 运行代码检查
-        - 指定时间发送
-        - 周期发送
         - 取消任务
+        - 运行代码检查
         default: 查看状态
+      mail_style:
+        description: 发送邮件/循环发送的内容类型；预设信使用小澪准备的完整正文
+        type: choice
+        options:
+        - 小澪预设信
+        - 随机来信
+        - 小龙娘随机故事
+        default: 小澪预设信
       timing:
         description: 目标时间：留空优先使用小澪预设，未预设则立即发送；可填 now、after:10m、带时区时间或 random:5m:730d
         type: string
         default: ''
         required: false
       repeat_rule:
-        description: 重复规则：留空不重复；every:2h 或 random:5m:2d
+        description: 重复规则：循环发送必填；every:2h 或 random:5m:2d；普通发送留空不重复
         type: string
         default: ''
         required: false
@@ -38,7 +41,7 @@ run-name: ${{ github.event_name == 'schedule' && '定时检查' || github.event_
         default: ''
         required: false
       custom_subject:
-        description: 自定义主题（仅发送自定义邮件使用）
+        description: 自定义主题（仅小澪预设信或漫画使用；留空使用预设）
         type: string
         required: false
         default: ''

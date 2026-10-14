@@ -2,7 +2,7 @@ import { senderDisplay } from '../shared/sender';
 import { bodyParts, type ImageInfo, type ImageInput } from '../shared/images';
 import { ArrowUpRight, Check, Clock3, Mail, Send, X } from 'lucide-react';
 import type { MailTask, SiteConfig } from '../shared/schema';
-import { statusLabels } from '../shared/schema';
+import { statusLabels, canDeleteRecord } from '../shared/schema';
 export function Mark({ small = false }: { small?: boolean }) {
   return (
     <span className={'brand-mark ' + (small ? 'small' : '')}>
@@ -145,11 +145,13 @@ export function TaskDetail({
   config,
   onClose,
   onCancel,
+  onDelete,
 }: {
   task: MailTask;
   config: SiteConfig;
   onClose: () => void;
   onCancel: (task: MailTask) => void;
+  onDelete: (task: MailTask) => void;
 }) {
   return (
     <Modal title="信件详情" onClose={onClose}>
@@ -201,6 +203,11 @@ export function TaskDetail({
       )}
       {task.status === 'accepted' && (
         <p className="fine-print">邮件服务已接受提交，最终是否进入收件箱仍以收件人邮箱为准。</p>
+      )}
+      {canDeleteRecord(task.status) && (
+        <button className="button danger" onClick={() => onDelete(task)}>
+          删除这封信的记录
+        </button>
       )}
       {task.status === 'queued' && (
         <button className="button danger" onClick={() => onCancel(task)}>

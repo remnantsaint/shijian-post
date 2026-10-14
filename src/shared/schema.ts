@@ -60,6 +60,29 @@ export const profileSchema = z
       .refine((v) => !/[\x00-\x1f\x7f<>"\\]/.test(v), '昵称不能包含换行或邮件地址符号'),
   })
   .strict();
+export const invitationSchema = z
+  .object({
+    maxUses: z.number().int().min(1).max(1000).default(10),
+    isPublic: z.boolean().default(false),
+  })
+  .strict();
+export interface PublicInvitation {
+  code: string;
+  remaining: number;
+  expiresAt: string;
+}
+export interface Invitation extends PublicInvitation {
+  id: string;
+  code: string;
+  maxUses: number;
+  usedCount: number;
+  createdAt: string;
+  isPublic: boolean;
+  revokedAt: string | null;
+  status: 'available' | 'exhausted' | 'expired' | 'revoked';
+}
+export const canDeleteRecord = (status: Status) =>
+  ['accepted', 'simulated', 'failed', 'cancelled', 'expired'].includes(status);
 export type MailInput = z.infer<typeof mailSchema>;
 export type Status =
   | 'queued'
@@ -100,6 +123,7 @@ export interface Template {
   body: string;
 }
 export interface SiteConfig {
+  publicInvites: PublicInvitation[];
   senderFrom: string;
   user: User | null;
   demoAvailable: boolean;

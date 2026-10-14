@@ -40,6 +40,7 @@ export async function createTask(env: Env, userId: string, input: MailInput, now
     .first<TaskRow>();
   if (old) {
     if (old.user_id !== userId || old.payload_hash !== hash) throw new Error('ID_CONFLICT');
+    if (old.deleted_at) throw new Error('TASK_DELETED');
     return { task: old, created: false };
   }
   const target = input.sendAt ? new Date(input.sendAt) : now;
@@ -105,7 +106,7 @@ export async function dispatchTask(
     .bind(now, id, now)
     .run();
   const task = await env.DB.prepare(
-    "UPDATE tasks SET status='sending',claimed_at=? WHERE id=? AND status='queued' AND target_at<=? RETURNING *",
+    "UPDATE tasks SET status='sending',claimed_at=? WHERE id=? AND status='queued' AND deleted_at IS NULL AND target_at<=? RETURNING *",
   )
     .bind(now, id, now)
     .first<TaskRow>();
@@ -225,7 +226,7 @@ export async function runDueTasks(env: Env, options: { now?: Date; fetcher?: typ
   await cleanupImages(env);
   if (await paused(env)) return;
   const due = await env.DB.prepare(
-    "SELECT id FROM tasks WHERE status='queued' AND target_at<=? ORDER BY target_at LIMIT 10",
+    "SELECT id FROM tasks WHERE status='queued' AND deleted_at IS NULL AND target_at<=? ORDER BY target_at LIMIT 10",
   )
     .bind(now.toISOString())
     .all<{ id: string }>();

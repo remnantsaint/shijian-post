@@ -102,7 +102,7 @@ beforeAll(async () => {
       script: compiled.outputFiles[0].text,
       compatibilityDate: '2026-10-13',
       compatibilityFlags: ['nodejs_compat'],
-      d1Databases: ['DB'],
+      d1Databases: ['DB', 'LegacyDB'],
       bindings: {
         ENVIRONMENT: 'development',
         MAIL_MODE: 'mock',
@@ -123,25 +123,29 @@ beforeAll(async () => {
     }),
   );
   db = (await mf.getD1Database('DB')) as unknown as D1Database;
-  const sql = (
-    await Promise.all(
-      (await readdir('migrations'))
-        .filter((n) => n.endsWith('.sql'))
-        .sort()
-        .map((n) => readFile('migrations/' + n, 'utf8')),
-    )
-  ).join(';');
-  for (const statement of sql
-    .split(';')
-    .map((s) => s.trim())
-    .filter(Boolean))
-    await db.prepare(statement).run();
+  for (const name of (await readdir('migrations')).filter((n) => n.endsWith('.sql')).sort()) {
+    const sql = await readFile('migrations/' + name, 'utf8');
+    const triggers: string[] = [];
+    const plain = sql.replace(/CREATE TRIGGER[\s\S]*?END;/gi, (trigger) => {
+      triggers.push(trigger);
+      return '';
+    });
+    for (const statement of [
+      ...plain
+        .split(';')
+        .map((s) => s.trim())
+        .filter(Boolean),
+      ...triggers,
+    ])
+      await db.prepare(statement).run();
+  }
 }, 60000);
 beforeEach(async () => {
   for (const table of [
     'task_images',
     'tasks',
     'templates',
+    'invitation_redemptions',
     'invitations',
     'sessions',
     'oauth_states',
@@ -200,12 +204,17 @@ describe('账户、权限与请求边界', () => {
     expect(listing.tasks).toEqual([]);
   });
   it('requires invitation activation and allows exactly one claimant', async () => {
-    const invite = (await (await request('/admin/invites', 'POST', {})).json()) as { code: string };
+    const invite = (await (await request('/admin/invites', 'POST', { maxUses: 1 })).json()) as {
+      code: string;
+    };
     const other = await otherUser(false);
     expect((await request('/tasks', 'POST', payload(), other)).status).toBe(403);
     expect((await request('/auth/invite', 'POST', { code: invite.code }, other)).status).toBe(200);
     expect((await request('/tasks', 'POST', payload(), other)).status).toBe(201);
-    expect((await request('/auth/invite', 'POST', { code: invite.code })).status).toBe(400);
+    expect((await request('/auth/invite', 'POST', { code: invite.code })).status).toBe(200);
+    expect(await db.prepare('SELECT used_count FROM invitations').first()).toEqual({
+      used_count: 1,
+    });
     expect((await request('/admin/invites', 'POST', {}, other)).status).toBe(403);
   });
   it('consumes OAuth state and creates the configured administrator', async () => {
@@ -864,5 +873,258 @@ describe('寄件昵称与成员设置', () => {
       body: JSON.stringify({ role: 'admin' }),
     });
     expect(publicLogin.status).toBe(404);
+  });
+});
+
+async function inactiveMember(id: string) {
+  await db
+    .prepare(
+      "INSERT INTO users(id,github_id,github_login,name,role,active,created_at) VALUES(?,?,?,?,'member',0,?)",
+    )
+    .bind(id, id, id, '新朋友', new Date().toISOString())
+    .run();
+  const raw = await digest('test-session-' + id);
+  await db
+    .prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)')
+    .bind(await digest(raw), id, future())
+    .run();
+  return 'manyou_session=' + raw;
+}
+describe('多人邀请码、公开名额与并发开通', () => {
+  it('only publicly selected usable codes appear to visitors; admins can inspect private balances', async () => {
+    const visible = await request('/admin/invites', 'POST', { maxUses: 10, isPublic: true });
+    expect(visible.status).toBe(201);
+    const pub = (await visible.json()) as { invitation: { id: string }; code: string };
+    const privateInvite = (await (
+      await request('/admin/invites', 'POST', { maxUses: 2 })
+    ).json()) as { code: string };
+    const config = (await (await request('/config', 'GET', undefined, '')).json()) as {
+      publicInvites: { code: string; remaining: number }[];
+    };
+    expect(config.publicInvites).toEqual([
+      { code: pub.code, remaining: 10, expiresAt: expect.any(String) },
+    ]);
+    expect(JSON.stringify(config)).not.toContain(privateInvite.code);
+    expect((await request('/admin/invites', 'GET', undefined, '')).status).toBe(401);
+    expect((await request('/admin/invites', 'GET', undefined, await otherUser())).status).toBe(403);
+    const list = (await (await request('/admin/invites')).json()) as {
+      invitations: { maxUses: number; usedCount: number; remaining: number }[];
+    };
+    expect(list.invitations).toHaveLength(2);
+    expect(list.invitations.find((i) => i.maxUses === 10)).toMatchObject({
+      usedCount: 0,
+      remaining: 10,
+    });
+    await request('/admin/invites/' + pub.invitation.id + '/public', 'POST', { isPublic: false });
+    expect(await (await request('/config', 'GET', undefined, '')).json()).toMatchObject({
+      publicInvites: [],
+    });
+    for (const data of [
+      { maxUses: 0 },
+      { maxUses: 1.5 },
+      { maxUses: 1001 },
+      { maxUses: 10, role: 'admin' },
+    ])
+      expect((await request('/admin/invites', 'POST', data)).status).toBe(400);
+  });
+  it('grants exactly the last available slot under simultaneous redemptions', async () => {
+    const created = (await (
+      await request('/admin/invites', 'POST', { maxUses: 1, isPublic: true })
+    ).json()) as { code: string };
+    const cookies = await Promise.all(
+      Array.from({ length: 8 }, (_, i) => inactiveMember('claim-' + i)),
+    );
+    const results = await Promise.all(
+      cookies.map((session) => request('/auth/invite', 'POST', { code: created.code }, session)),
+    );
+    expect(results.filter((r) => r.status === 200)).toHaveLength(1);
+    expect(results.filter((r) => r.status === 400)).toHaveLength(7);
+    expect(await db.prepare('SELECT used_count,max_uses FROM invitations').first()).toEqual({
+      used_count: 1,
+      max_uses: 1,
+    });
+    expect(
+      await db.prepare("SELECT SUM(active) AS total FROM users WHERE id LIKE 'claim-%'").first(),
+    ).toEqual({ total: 1 });
+    const winner = cookies[results.findIndex((r) => r.status === 200)];
+    await request('/auth/invite', 'POST', { code: created.code }, winner);
+    expect(await db.prepare('SELECT used_count FROM invitations').first()).toEqual({
+      used_count: 1,
+    });
+    expect(await (await request('/config', 'GET', undefined, '')).json()).toMatchObject({
+      publicInvites: [],
+    });
+  });
+  it('a user does not consume several codes and revoked or expired invitations cannot activate anyone', async () => {
+    const first = (await (
+      await request('/admin/invites', 'POST', { maxUses: 10, isPublic: true })
+    ).json()) as { code: string; invitation: { id: string } };
+    const second = (await (await request('/admin/invites', 'POST', { maxUses: 10 })).json()) as {
+      code: string;
+      invitation: { id: string };
+    };
+    const member = await inactiveMember('repeat');
+    await Promise.all([
+      request('/auth/invite', 'POST', { code: first.code }, member),
+      request('/auth/invite', 'POST', { code: second.code }, member),
+    ]);
+    expect(await db.prepare('SELECT SUM(used_count) AS used FROM invitations').first()).toEqual({
+      used: 1,
+    });
+    await request('/admin/invites/' + first.invitation.id + '/revoke', 'POST', {});
+    expect(
+      (await request('/auth/invite', 'POST', { code: first.code }, await inactiveMember('revoked')))
+        .status,
+    ).toBe(400);
+    await db
+      .prepare("UPDATE invitations SET expires_at='2000-01-01T00:00:00.000Z' WHERE code_hash=?")
+      .bind(second.invitation.id)
+      .run();
+    expect(
+      (
+        await request(
+          '/auth/invite',
+          'POST',
+          { code: second.code },
+          await inactiveMember('expired'),
+        )
+      ).status,
+    ).toBe(400);
+    expect(await (await request('/config', 'GET', undefined, '')).json()).toMatchObject({
+      publicInvites: [],
+    });
+    expect((await request('/tasks', 'POST', payload(), member)).status).toBe(201);
+  });
+  it('rolls back the debit and redemption if activation cannot be written', async () => {
+    const invitation = (await (
+      await request('/admin/invites', 'POST', { maxUses: 10 })
+    ).json()) as { code: string };
+    const member = await inactiveMember('rollback');
+    await db
+      .prepare(
+        "CREATE TRIGGER reject_activation BEFORE UPDATE OF active ON users WHEN NEW.id='rollback' BEGIN SELECT RAISE(ABORT, 'test write failure'); END",
+      )
+      .run();
+    try {
+      expect(
+        (await request('/auth/invite', 'POST', { code: invitation.code }, member)).status,
+      ).toBe(500);
+    } finally {
+      await db.prepare('DROP TRIGGER reject_activation').run();
+    }
+    expect(await db.prepare('SELECT used_count FROM invitations').first()).toEqual({
+      used_count: 0,
+    });
+    expect(await db.prepare('SELECT * FROM invitation_redemptions').first()).toBeNull();
+    expect(await db.prepare("SELECT active FROM users WHERE id='rollback'").first()).toEqual({
+      active: 0,
+    });
+    expect((await request('/auth/invite', 'POST', { code: invitation.code }, member)).status).toBe(
+      200,
+    );
+  });
+  it('migrates previously used single-use invitations without reopening them', async () => {
+    const legacy = (await mf.getD1Database('LegacyDB')) as unknown as D1Database;
+    for (const name of ['0001_initial.sql', '0002_inline_images.sql', '0003_sender_nickname.sql']) {
+      for (const statement of (await readFile('migrations/' + name, 'utf8'))
+        .split(';')
+        .map((s) => s.trim())
+        .filter(Boolean))
+        await legacy.prepare(statement).run();
+    }
+    await legacy
+      .prepare(
+        "INSERT INTO users(id,github_id,github_login,name,role,active,created_at) VALUES('admin','a','a','a','admin',1,'2026-01-01'),('member','b','b','b','member',1,'2026-01-01')",
+      )
+      .run();
+    await legacy
+      .prepare(
+        "INSERT INTO invitations VALUES('used-code','admin','2026-01-01','2099-01-01','member'),('unused-code','admin','2026-01-01','2099-01-01',NULL)",
+      )
+      .run();
+    const sql = await readFile('migrations/0004_invites_history.sql', 'utf8');
+    const triggers: string[] = [];
+    const plain = sql.replace(/CREATE TRIGGER[\s\S]*?END;/gi, (trigger) => {
+      triggers.push(trigger);
+      return '';
+    });
+    for (const statement of [
+      ...plain
+        .split(';')
+        .map((s) => s.trim())
+        .filter(Boolean),
+      ...triggers,
+    ])
+      await legacy.prepare(statement).run();
+    expect(
+      await legacy
+        .prepare(
+          "SELECT max_uses,used_count,is_public,code FROM invitations WHERE code_hash='used-code'",
+        )
+        .first(),
+    ).toEqual({ max_uses: 1, used_count: 1, is_public: 0, code: null });
+    expect(
+      await legacy
+        .prepare("SELECT max_uses,used_count FROM invitations WHERE code_hash='unused-code'")
+        .first(),
+    ).toEqual({ max_uses: 1, used_count: 0 });
+    expect(await legacy.prepare('SELECT user_id FROM invitation_redemptions').first()).toEqual({
+      user_id: 'member',
+    });
+  });
+});
+describe('删除指定历史记录与去重', () => {
+  it('removes content and images but retains the task ID and opt-out route', async () => {
+    const input = withImage();
+    await request('/tasks', 'POST', input);
+    await due(input.id);
+    await dispatchTask(engineEnv(), input.id, {
+      fetcher: async () => new Response('', { status: 422 }),
+    });
+    const original = await row(input.id);
+    expect(await imageCount(input.id)).toBe(1);
+    const other = await otherUser();
+    expect((await request('/tasks/' + input.id, 'DELETE', {}, other)).status).toBe(404);
+    expect((await request('/tasks/' + input.id, 'DELETE', {})).status).toBe(200);
+    const removed = await row(input.id);
+    expect(removed.subject).toBe('');
+    expect(removed.body).toBe('');
+    expect(removed.deleted_at).not.toBeNull();
+    expect(removed.payload_hash).toBe(original.payload_hash);
+    expect(await imageCount(input.id)).toBe(0);
+    expect((await request('/tasks/' + input.id)).status).toBe(410);
+    expect((await request('/tasks/' + input.id, 'GET', undefined, other)).status).toBe(404);
+    expect(await (await request('/tasks')).json()).toEqual({ tasks: [] });
+    expect((await request('/tasks', 'POST', input)).status).toBe(410);
+    expect(await imageCount(input.id)).toBe(0);
+    expect((await request('/tasks/' + input.id, 'DELETE', {})).status).toBe(200);
+    expect(
+      (await request('/unsubscribe/' + original.unsubscribe_token, 'POST', {}, '')).status,
+    ).toBe(200);
+    expect(await db.prepare('SELECT recipient FROM suppressions').first()).toEqual({
+      recipient: original.recipient,
+    });
+  });
+  it('protects queued, sending and uncertain tasks and still never retries hidden tasks', async () => {
+    for (const status of ['queued', 'sending', 'uncertain']) {
+      const input = withImage();
+      await request('/tasks', 'POST', input);
+      await db.prepare('UPDATE tasks SET status=? WHERE id=?').bind(status, input.id).run();
+      expect((await request('/tasks/' + input.id, 'DELETE', {})).status).toBe(409);
+      expect(await imageCount(input.id)).toBe(1);
+      expect((await row(input.id)).deleted_at).toBeNull();
+    }
+    const input = payload({ sendAt: undefined });
+    await request('/tasks', 'POST', input);
+    await request('/tasks/' + input.id, 'DELETE', {});
+    let calls = 0;
+    await dispatchTask(engineEnv(), input.id, {
+      fetcher: async () => {
+        calls++;
+        return Response.json({ id: 'never' });
+      },
+    });
+    expect(calls).toBe(0);
+    expect((await request('/tasks/' + input.id, 'DELETE', {}, '')).status).toBe(401);
   });
 });

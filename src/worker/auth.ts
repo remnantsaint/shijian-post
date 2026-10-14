@@ -150,13 +150,18 @@ auth.post('/invite', async (c) => {
   const input = await c.req.json<{ code?: unknown }>();
   if (typeof input.code !== 'string' || !/^[a-f0-9]{64}$/.test(input.code))
     return c.json({ error: '邀请码格式不正确' }, 400);
+  if (user.active) return c.json({ ok: true });
   const codeHash = await digest(input.code);
-  const invite = await c.env.DB.prepare(
-    'UPDATE invitations SET used_by=? WHERE code_hash=? AND expires_at>? AND (used_by IS NULL OR used_by=?) RETURNING code_hash',
+  const now = new Date().toISOString();
+  // One SQL statement plus its trigger atomically debits a slot and activates the account.
+  await c.env.DB.prepare(
+    'INSERT OR IGNORE INTO invitation_redemptions(code_hash,user_id,created_at) SELECT code_hash,?,? FROM invitations WHERE code_hash=? AND expires_at>? AND revoked_at IS NULL AND used_count<max_uses AND EXISTS(SELECT 1 FROM users WHERE id=? AND active=0) AND NOT EXISTS(SELECT 1 FROM invitation_redemptions WHERE user_id=?)',
   )
-    .bind(user.id, codeHash, new Date().toISOString(), user.id)
-    .first();
-  if (!invite) return c.json({ error: '邀请码无效、已过期或已被使用' }, 400);
-  await c.env.DB.prepare('UPDATE users SET active=1 WHERE id=?').bind(user.id).run();
+    .bind(user.id, now, codeHash, now, user.id, user.id)
+    .run();
+  const active = await c.env.DB.prepare('SELECT active FROM users WHERE id=?')
+    .bind(user.id)
+    .first<{ active: number }>();
+  if (!active?.active) return c.json({ error: '邀请码已过期、已停用或开通名额已用完' }, 400);
   return c.json({ ok: true });
 });

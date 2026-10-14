@@ -2132,3 +2132,138 @@ tbody tr:hover {
   font-weight: 400;
   line-height: 1.8;
 }
+
+.record-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.record-actions button:disabled {
+  cursor: not-allowed;
+}
+.draft-clear {
+  font-size: inherit;
+  color: var(--muted);
+  padding: 0;
+  margin-left: auto;
+}
+.editor-footer {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.invite-create {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 18px;
+  padding: 20px 0;
+}
+.invite-create > div:first-child {
+  flex-basis: 100%;
+}
+.invite-create p,
+.invite-item p {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.8;
+  margin-top: 8px;
+}
+.invite-capacity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+.invite-capacity input {
+  width: 84px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.invite-public-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.invite-create > button {
+  margin-left: auto;
+}
+.invite-list-heading,
+.invite-item-head,
+.invite-item-actions,
+.public-invite {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.invite-list-heading {
+  margin: 10px 0 14px;
+}
+.invite-list-heading h3 {
+  font-size: 13px;
+  font-weight: 500;
+}
+.invite-list {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.invite-item {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.invite-item-head {
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.invite-item-head strong {
+  font-weight: 500;
+  color: var(--green);
+}
+.invite-token {
+  display: block;
+  margin: 12px 0;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  line-height: 1.8;
+}
+.invite-item-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.danger-text {
+  color: #985c46;
+}
+.public-invites {
+  border-top: 1px solid var(--line);
+  margin-top: 20px;
+  padding-top: 16px;
+}
+.public-invites > p {
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.public-invite {
+  padding: 8px 0;
+  font-size: 12px;
+}
+.public-invites small {
+  display: block;
+  font-size: 10px;
+  line-height: 1.8;
+  color: var(--muted);
+}
+@media (max-width: 600px) {
+  .invite-create {
+    gap: 12px;
+  }
+  .invite-create > button {
+    margin-left: 0;
+  }
+}

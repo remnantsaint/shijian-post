@@ -300,3 +300,315 @@ test('ordinary member preview saves a nickname, cannot manage the post office an
   await page.getByRole('button', { name: title, exact: true }).click();
   await expect(page.getByRole('dialog').locator('.task-facts')).toContainText('小王 · 柿间邮局');
 });
+
+test('draft text and images survive reload and move from guest to the correct account', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: '今天，寄一点心意。' })).toBeVisible();
+  await page.getByLabel('寄给谁').fill('draft@example.com');
+  await page.getByLabel('信的标题').fill('刷新后仍然在的草稿');
+  await page.getByLabel('想说的话').fill('这段文字和照片要一起保存。');
+  await page.getByLabel('选择正文图片').setInputFiles(await tinyImage(page));
+  await expect(page.locator('.editor-image')).toHaveCount(1);
+  await expect(page.getByText('草稿已自动保存', { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel('信的标题')).toHaveValue('刷新后仍然在的草稿');
+  await expect(page.locator('.paper-image')).toHaveCount(1);
+  await page.getByRole('button', { name: '登录邮局', exact: true }).click();
+  await page.getByRole('button', { name: '预览邮局 · 不发送邮件', exact: true }).click();
+  await expect(page.getByRole('button', { name: '退出登录', exact: true })).toBeVisible();
+  await expect(page.getByLabel('信的标题')).toHaveValue('刷新后仍然在的草稿');
+  await expect(page.locator('.paper-image')).toHaveCount(1);
+  await page.getByRole('button', { name: '退出登录', exact: true }).click();
+  await expect(page.getByRole('button', { name: '登录邮局', exact: true })).toBeVisible();
+  await expect(page.getByLabel('信的标题')).toHaveValue('');
+  await expect(page.locator('.paper-image')).toHaveCount(0);
+  await page.getByRole('button', { name: '登录邮局', exact: true }).click();
+  await page.getByRole('button', { name: '普通寄信人预览 · 不发送邮件', exact: true }).click();
+  await expect(page.getByLabel('信的标题')).toHaveValue('');
+  await page.getByLabel('信的标题').fill('成员自己的草稿');
+  await page.getByLabel('想说的话').fill('只有这个账号能恢复。');
+  await expect(page.getByText('草稿已自动保存', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '退出登录', exact: true }).click();
+  await expect(page.getByRole('button', { name: '登录邮局', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '登录邮局', exact: true }).click();
+  await page.getByRole('button', { name: '预览邮局 · 不发送邮件', exact: true }).click();
+  await expect(page.getByLabel('信的标题')).toHaveValue('刷新后仍然在的草稿');
+  await expect(page.locator('.paper-image')).toHaveCount(1);
+  page.once('dialog', (d) => d.accept());
+  await page.getByRole('button', { name: '清空草稿', exact: true }).click();
+  await page.reload();
+  await expect(page.getByLabel('信的标题')).toHaveValue('');
+  await expect(page.locator('.paper-image')).toHaveCount(0);
+});
+test('pending request ID survives reload without another POST or an editable restored letter', async ({
+  page,
+}) => {
+  await enter(page);
+  let calls = 0,
+    originalId = '';
+  await page.route('**/api/tasks', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+    calls++;
+    originalId = route.request().postDataJSON().id;
+    await route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: '模拟连接中断，请核对记录' }),
+    });
+  });
+  await page.getByLabel('寄给谁').fill('uncertain@example.com');
+  await page.getByLabel('信的标题').fill('不能重复寄出的草稿');
+  await page.getByLabel('想说的话').fill('刷新只恢复草稿，不重新提交。');
+  await page.getByRole('button', { name: '寄出这封信', exact: true }).click();
+  await expect(page.getByRole('button', { name: '核对发送记录', exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('button', { name: '核对发送记录', exact: true })).toBeVisible();
+  await expect(page.getByLabel('信的标题')).toHaveValue('不能重复寄出的草稿');
+  await expect(page.getByLabel('想说的话')).toHaveAttribute('contenteditable', 'false');
+  expect(calls).toBe(1);
+  expect(
+    await page.evaluate(
+      () => JSON.parse(localStorage.getItem('shijian-post:draft:local-demo')!).pendingId,
+    ),
+  ).toBe(originalId);
+});
+test('completed submission clears its draft and one history record can be deleted', async ({
+  page,
+}) => {
+  await enter(page);
+  const title = '删除指定记录 ' + Date.now();
+  await page.getByLabel('寄给谁').fill('delete@example.com');
+  await page.getByLabel('信的标题').fill(title);
+  await page.getByLabel('想说的话').fill('用于模拟验收删除记录。');
+  const response = page.waitForResponse(
+    (r) => r.url().endsWith('/api/tasks') && r.request().method() === 'POST',
+  );
+  await page.getByRole('button', { name: '寄出这封信', exact: true }).click();
+  const saved = await (await response).json();
+  await expect(page.getByRole('dialog').getByText('预览完成', { exact: true })).toBeVisible();
+  expect(
+    await page.evaluate(() => localStorage.getItem('shijian-post:draft:local-demo')),
+  ).toBeNull();
+  await page.getByRole('button', { name: '去信件记录看看' }).click();
+  await page.getByRole('textbox', { name: '搜索信件' }).fill(title);
+  await page.getByRole('button', { name: title, exact: true }).click();
+  page.once('dialog', (d) => d.accept());
+  await page.getByRole('button', { name: '删除这封信的记录', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: title, exact: true })).toHaveCount(0);
+  expect((await page.request.get('/api/tasks/' + saved.task.id)).status()).toBe(410);
+  await page.reload();
+  await expect(page.getByLabel('信的标题')).toHaveValue('');
+});
+test('administrator creates public invitations, retains balances on reload and can stop new activations', async ({
+  page,
+}) => {
+  await enter(page);
+  await page.getByRole('button', { name: '邮局设置', exact: true }).click();
+  await page.getByLabel('可开通人数').fill('2');
+  await page.getByLabel('在登录页公开邀请码').check();
+  const response = page.waitForResponse(
+    (r) => r.url().endsWith('/api/admin/invites') && r.request().method() === 'POST',
+  );
+  await page.getByRole('button', { name: '生成邀请', exact: true }).click();
+  const created = await (await response).json();
+  const code = created.code;
+  await expect(page.getByLabel('生成的邀请码')).toHaveValue(code);
+  await page.getByRole('button', { name: '关闭', exact: true }).click();
+  const item = page.locator('.invite-item').filter({ hasText: code });
+  await expect(item.getByText('剩余 2 / 2 名', { exact: true })).toBeVisible();
+  await page.reload();
+  await page.getByRole('button', { name: '邮局设置', exact: true }).click();
+  await expect(item).toBeVisible();
+  await item.getByRole('button', { name: '取消公开', exact: true }).click();
+  expect(
+    (await (await page.request.get('/api/config')).json()).publicInvites.some(
+      (i: { code: string }) => i.code === code,
+    ),
+  ).toBe(false);
+  await item.getByRole('button', { name: '公开邀请码', exact: true }).click();
+  await expect(item.getByText('可使用 · 公开', { exact: true })).toBeVisible();
+  await page.locator('.admin-card').screenshot({ path: 'test-results/invite-management.png' });
+  await page.getByRole('button', { name: '退出登录', exact: true }).click();
+  await expect(page.getByRole('button', { name: '登录邮局', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '登录邮局', exact: true }).click();
+  const publicItem = page.locator(`.public-invite[data-code="${code}"]`);
+  await expect(publicItem).toContainText('剩余 2 个开通名额');
+  await publicItem.getByRole('button', { name: '使用此邀请码', exact: true }).click();
+  expect(await page.evaluate(() => sessionStorage.getItem('manyou-invite'))).toBe(code);
+  await page.getByRole('button', { name: '预览邮局 · 不发送邮件', exact: true }).click();
+  await expect(page.getByRole('button', { name: '退出登录', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '邮局设置', exact: true }).click();
+  page.once('dialog', (d) => d.accept());
+  await item.getByRole('button', { name: '停用', exact: true }).click();
+  await expect(item.getByText('已停用 · 私有', { exact: true })).toBeVisible();
+  expect(
+    (await (await page.request.get('/api/config')).json()).publicInvites.some(
+      (i: { code: string }) => i.code === code,
+    ),
+  ).toBe(false);
+});
+
+test('login preserves both guest and account drafts until the user explicitly chooses one', async ({
+  page,
+}) => {
+  await enter(page);
+  await page.getByLabel('信的标题').fill('账号之前保存的草稿');
+  await page.getByLabel('想说的话').fill('原来的内容不能被登录自动覆盖。');
+  await expect(page.getByText('草稿已自动保存', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '退出登录', exact: true }).click();
+  await expect(page.getByRole('button', { name: '登录邮局', exact: true })).toBeVisible();
+  await page.getByLabel('信的标题').fill('登录前刚写的另一份草稿');
+  await page.getByLabel('想说的话').fill('这是新的内容。');
+  await expect(page.getByText('草稿已自动保存', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '登录邮局', exact: true }).click();
+  await page.getByRole('button', { name: '预览邮局 · 不发送邮件', exact: true }).click();
+  await expect(page.getByLabel('信的标题')).toHaveValue('账号之前保存的草稿');
+  await expect(
+    page.getByRole('button', { name: '使用登录前的另一份草稿', exact: true }),
+  ).toBeVisible();
+  page.once('dialog', (d) => d.accept());
+  await page.getByRole('button', { name: '使用登录前的另一份草稿', exact: true }).click();
+  await expect(page.getByLabel('信的标题')).toHaveValue('登录前刚写的另一份草稿');
+  await expect(
+    page.getByRole('button', { name: '使用登录前的另一份草稿', exact: true }),
+  ).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByLabel('信的标题')).toHaveValue('登录前刚写的另一份草稿');
+});
+
+test('late pending-task lookup cannot erase a draft the user has explicitly restarted', async ({
+  page,
+}) => {
+  await enter(page);
+  const id = crypto.randomUUID();
+  await page.evaluate(
+    (id) =>
+      localStorage.setItem(
+        'shijian-post:draft:local-demo',
+        JSON.stringify({
+          version: 1,
+          owner: 'local-demo',
+          savedAt: new Date().toISOString(),
+          pendingId: id,
+          draft: {
+            recipient: 'old@example.com',
+            subject: '旧的待核对草稿',
+            body: '旧正文',
+            images: [],
+            timing: 'now',
+            sendAt: '',
+          },
+        }),
+      ),
+    id,
+  );
+  let release!: () => void, arrived!: () => void;
+  const gate = new Promise<void>((r) => {
+      release = r;
+    }),
+    started = new Promise<void>((r) => {
+      arrived = r;
+    });
+  await page.route('**/api/tasks/' + id, async (route) => {
+    arrived();
+    await gate;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        task: {
+          id,
+          recipient: 'old@example.com',
+          subject: '旧的已接受邮件',
+          body: '旧正文',
+          status: 'accepted',
+          targetAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          finishedAt: new Date().toISOString(),
+          providerId: 'test-only',
+          reason: null,
+          images: [],
+          imagesAvailable: false,
+          senderFrom: null,
+        },
+      }),
+    });
+  });
+  await page.reload();
+  await started;
+  await expect(page.getByRole('button', { name: '核对发送记录', exact: true })).toBeVisible();
+  page.once('dialog', (d) => d.accept());
+  await page.getByRole('button', { name: '清空草稿', exact: true }).click();
+  await page.getByLabel('信的标题').fill('我明确新建的草稿');
+  await page.getByLabel('想说的话').fill('新内容必须保留。');
+  const response = page.waitForResponse((r) => r.url().endsWith('/api/tasks/' + id));
+  release();
+  await response;
+  await expect(page.getByText('草稿已自动保存', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('信的标题')).toHaveValue('我明确新建的草稿');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+});
+test('a previous account task list cannot appear after switching accounts', async ({ page }) => {
+  let release!: () => void,
+    arrived!: () => void,
+    first = true;
+  const gate = new Promise<void>((r) => {
+      release = r;
+    }),
+    started = new Promise<void>((r) => {
+      arrived = r;
+    });
+  await page.route('**/api/tasks', async (route) => {
+    if (route.request().method() !== 'GET' || !first) {
+      await route.continue();
+      return;
+    }
+    first = false;
+    arrived();
+    await gate;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        tasks: [
+          {
+            id: crypto.randomUUID(),
+            recipient: 'admin-only@example.com',
+            subject: '上一个账号的私有测试记录',
+            body: '不应出现在成员页',
+            status: 'simulated',
+            targetAt: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+            finishedAt: new Date().toISOString(),
+            providerId: null,
+            reason: null,
+            images: [],
+            imagesAvailable: false,
+            senderFrom: null,
+          },
+        ],
+      }),
+    });
+  });
+  await enter(page);
+  await started;
+  await page.getByRole('button', { name: '退出登录', exact: true }).click();
+  await expect(page.getByRole('button', { name: '登录邮局', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '登录邮局', exact: true }).click();
+  await page.getByRole('button', { name: '普通寄信人预览 · 不发送邮件', exact: true }).click();
+  await expect(page.getByText('寄信人预览', { exact: true })).toBeVisible();
+  const response = page.waitForResponse((r) => r.url().endsWith('/api/tasks'));
+  release();
+  await response;
+  await page.getByRole('button', { name: '信件记录', exact: true }).click();
+  await page.getByRole('textbox', { name: '搜索信件' }).fill('上一个账号的私有测试记录');
+  await expect(
+    page.getByRole('button', { name: '上一个账号的私有测试记录', exact: true }),
+  ).toHaveCount(0);
+});

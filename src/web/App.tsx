@@ -1,3 +1,4 @@
+import { useSavedDraft, mailPayload } from './draft-store';
 import { templateText } from '../shared/images';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -6,7 +7,6 @@ import {
   BookOpen,
   Check,
   ChevronRight,
-  Copy,
   Feather,
   Github,
   Inbox,
@@ -18,7 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import type { MailTask, SiteConfig, Template } from '../shared/schema';
-import Composer, { emptyDraft, type Draft } from './Composer';
+import Composer from './Composer';
 import { EmptyState, Mark, Modal, SendResult, TaskDetail } from './components';
 import { History, Settings, Templates } from './Panels';
 import Unsubscribe from './Unsubscribe';
@@ -37,7 +37,8 @@ function Workbench() {
   const [config, setConfig] = useState<SiteConfig | null>(null);
   const [loadError, setLoadError] = useState('');
   const [page, setPage] = useState<Page>('compose');
-  const [draft, setDraft] = useState<Draft>({ ...emptyDraft });
+  const drafts = useSavedDraft(config ? config.user?.id || 'guest' : null);
+  const { draft, setDraft } = drafts;
   const [tasks, setTasks] = useState<MailTask[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [busy, setBusy] = useState(false);
@@ -55,10 +56,45 @@ function Workbench() {
   const [detail, setDetail] = useState<MailTask | null>(null);
   const [saveOpen, setSaveOpen] = useState(false);
   const [templateName, setTemplateName] = useState('');
-  const [invitation, setInvitation] = useState('');
   const [uncertain, setUncertain] = useState(false);
   const requestRef = useRef<{ id: string; input: unknown } | null>(null);
   const configRequest = useRef(0);
+  const currentAccount = useRef<string | undefined>(undefined);
+  currentAccount.current = config?.user?.id;
+  useEffect(() => {
+    if (!drafts.ready) return;
+    const id = drafts.restoredPending;
+    requestRef.current = id ? { id, input: mailPayload(draft, id) } : null;
+    setUncertain(Boolean(id));
+    if (!id) return;
+    let live = true;
+    void api<{ task: MailTask }>('/tasks/' + id)
+      .then(({ task }) => {
+        if (!live || requestRef.current?.id !== id) return;
+        if (['accepted', 'simulated', 'queued'].includes(task.status)) {
+          drafts.clear();
+          requestRef.current = null;
+          setUncertain(false);
+          setResult(task);
+        } else if (['failed', 'cancelled', 'expired'].includes(task.status)) {
+          drafts.setPending(null);
+          requestRef.current = null;
+          setUncertain(false);
+          setResult(task);
+        }
+      })
+      .catch((error) => {
+        if (live && requestRef.current?.id === id && (error as ApiError).status === 410) {
+          drafts.clear();
+          requestRef.current = null;
+          setUncertain(false);
+          setNotice('之前提交的信件记录已删除，未再次寄出');
+        }
+      });
+    return () => {
+      live = false;
+    };
+  }, [drafts.ready, drafts.restoreVersion]);
   const refreshConfig = useCallback(async () => {
     const sequence = ++configRequest.current;
     try {
@@ -74,15 +110,17 @@ function Workbench() {
     }
   }, []);
   const loadData = useCallback(async (silent = false) => {
+    const owner = currentAccount.current;
     try {
       const [mailData, templateData] = await Promise.all([
         api<{ tasks: MailTask[] }>('/tasks'),
         api<{ templates: Template[] }>('/templates'),
       ]);
+      if (currentAccount.current !== owner) return;
       setTasks(mailData.tasks);
       setTemplates(templateData.templates);
     } catch (e) {
-      if (!silent) setNotice((e as Error).message);
+      if (!silent && currentAccount.current === owner) setNotice((e as Error).message);
     }
   }, []);
   useEffect(() => {
@@ -135,15 +173,16 @@ function Workbench() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
   const newLetter = () => {
+    if (busy) return;
     if (uncertain && !confirm('上一封信的结果尚未确认，请先核对记录。确定另外写一封新信吗？'))
       return;
-    setDraft({ ...emptyDraft });
+    drafts.clear();
     requestRef.current = null;
     setUncertain(false);
     navigate('compose');
   };
   const send = async () => {
-    if (!requireLogin() || busy || uncertain) return;
+    if (!requireLogin() || busy || uncertain || !drafts.ready) return;
     if (!draft.body.trim() || draft.body.length > 20000) {
       setNotice('请填写正文，且控制在 20,000 字以内');
       return;
@@ -161,29 +200,27 @@ function Workbench() {
     }
     if (!requestRef.current) {
       const id = crypto.randomUUID();
-      requestRef.current = {
-        id,
-        input: {
-          id,
-          recipient: draft.recipient,
-          subject: draft.subject,
-          body: draft.body,
-          images: draft.images,
-          ...(draft.timing === 'schedule'
-            ? { sendAt: new Date(draft.sendAt + ':00+08:00').toISOString() }
-            : {}),
-        },
-      };
+      requestRef.current = { id, input: mailPayload(draft, id) };
+      drafts.setPending(id);
     }
+    const owner = currentAccount.current;
     setBusy(true);
     try {
       const response = await post<{ task: MailTask }>('/tasks', requestRef.current.input);
+      if (currentAccount.current !== owner) return;
       setResult(response.task);
-      requestRef.current = null;
-      if (['queued', 'accepted', 'simulated'].includes(response.task.status))
-        setDraft({ ...emptyDraft });
+      if (['queued', 'accepted', 'simulated'].includes(response.task.status)) {
+        drafts.clear();
+        requestRef.current = null;
+      } else if (['sending', 'uncertain'].includes(response.task.status)) {
+        setUncertain(true);
+      } else {
+        drafts.setPending(null);
+        requestRef.current = null;
+      }
       await loadData(true);
     } catch (e) {
+      if (currentAccount.current !== owner) return;
       const error = e as ApiError;
       setNotice(error.message);
       if (
@@ -192,9 +229,39 @@ function Workbench() {
         error.status === 409
       )
         setUncertain(true);
-      else requestRef.current = null;
+      else {
+        requestRef.current = null;
+        drafts.setPending(null);
+      }
     } finally {
       setBusy(false);
+    }
+  };
+  const useGuestDraft = () => {
+    if (busy || uncertain || !confirm('用登录前的草稿替换当前草稿？当前草稿会被覆盖。')) return;
+    drafts.useGuest();
+  };
+  const clearDraft = () => {
+    if (
+      busy ||
+      !confirm(
+        uncertain ? '清空草稿不会撤回已提交邮件，请先核对发送记录。确定清空？' : '清空当前草稿？',
+      )
+    )
+      return;
+    drafts.clear();
+    requestRef.current = null;
+    setUncertain(false);
+  };
+  const deleteRecord = async (task: MailTask) => {
+    if (!confirm('删除这封信的记录、正文和图片？已发出的邮件不会撤回。')) return;
+    try {
+      await api('/tasks/' + task.id, { method: 'DELETE', body: '{}' });
+      setDetail(null);
+      setNotice('信件记录已删除');
+      await loadData();
+    } catch (error) {
+      setNotice((error as Error).message);
     }
   };
   const saveSenderName = async (senderName: string) => {
@@ -241,6 +308,10 @@ function Workbench() {
     }
   };
   const applyTemplate = (item: Template) => {
+    if (busy) {
+      setNotice('上一封信仍在提交，请稍后再使用模板');
+      return;
+    }
     if (uncertain) {
       setNotice('请先核对上一封信的记录，或点击“写一封新信”');
       return;
@@ -290,20 +361,11 @@ function Workbench() {
   const logout = async () => {
     try {
       await post('/auth/logout');
-      setDraft({ ...emptyDraft });
       setDetail(null);
       requestRef.current = null;
       setUncertain(false);
       await refreshConfig();
       setNotice('已退出登录');
-    } catch (e) {
-      setNotice((e as Error).message);
-    }
-  };
-  const createInvite = async () => {
-    try {
-      const data = await post<{ code: string }>('/admin/invites');
-      setInvitation(data.code);
     } catch (e) {
       setNotice((e as Error).message);
     }
@@ -316,14 +378,6 @@ function Workbench() {
       setNotice(config.paused ? '邮局重新营业啦' : '邮局已暂停，已经提交的邮件无法撤回');
     } catch (e) {
       setNotice((e as Error).message);
-    }
-  };
-  const copyInvite = async () => {
-    try {
-      await navigator.clipboard.writeText(invitation);
-      setNotice('邀请码已复制');
-    } catch {
-      setNotice('复制未完成，请手动选择并复制邀请码');
     }
   };
   if (!config)
@@ -471,6 +525,12 @@ function Workbench() {
           {page === 'compose' && (
             <Composer
               draft={draft}
+              guestDraftAvailable={drafts.guestAvailable}
+              onUseGuestDraft={useGuestDraft}
+              draftStatus={drafts.status}
+              draftError={drafts.error}
+              draftReady={drafts.ready}
+              onClearDraft={clearDraft}
               onChange={setDraft}
               onSubmit={() => void send()}
               busy={busy}
@@ -486,7 +546,12 @@ function Workbench() {
           )}
           {page === 'history' &&
             (config.user?.active ? (
-              <History tasks={tasks} onDetail={setDetail} onWrite={newLetter} />
+              <History
+                tasks={tasks}
+                onDetail={setDetail}
+                onWrite={newLetter}
+                onDelete={(task) => void deleteRecord(task)}
+              />
             ) : (
               <section className="panel guest-panel">
                 <EmptyState
@@ -510,7 +575,6 @@ function Workbench() {
               config={config}
               onSaveName={saveSenderName}
               onPause={() => void togglePause()}
-              onInvite={() => void createInvite()}
             />
           )}
           <footer className="workspace-footer">
@@ -602,6 +666,27 @@ function Workbench() {
               )}
             </>
           )}
+          {!config.user?.active && config.publicInvites?.length > 0 && (
+            <div className="public-invites">
+              <p>公开体验名额</p>
+              {config.publicInvites.map((item) => (
+                <div className="public-invite" key={item.code} data-code={item.code}>
+                  <span>剩余 {item.remaining} 个开通名额</span>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => {
+                      setInvite(item.code);
+                      sessionStorage.setItem('manyou-invite', item.code);
+                    }}
+                  >
+                    {invite === item.code ? '已选用' : '使用此邀请码'}
+                  </button>
+                </div>
+              ))}
+              <small>先使用 GitHub 登录，再用邀请码开通。每个账号只占 1 个名额。</small>
+            </div>
+          )}
           {authError && (
             <p className="form-error" role="alert">
               {authError}
@@ -637,17 +722,6 @@ function Workbench() {
           </form>
         </Modal>
       )}
-      {invitation && (
-        <Modal title="邀请一个朋友来寄信" onClose={() => setInvitation('')}>
-          <p className="modal-copy">
-            这个邀请码可使用一次，七天内有效。朋友用 GitHub 登录后，粘贴它即可开通。
-          </p>
-          <textarea className="invite-code" value={invitation} readOnly aria-label="生成的邀请码" />
-          <button className="button primary full" onClick={() => void copyInvite()}>
-            <Copy size={16} /> 复制邀请码
-          </button>
-        </Modal>
-      )}
       {result && (
         <SendResult
           task={result}
@@ -664,6 +738,7 @@ function Workbench() {
           config={config}
           onClose={() => setDetail(null)}
           onCancel={(task) => void cancelTask(task)}
+          onDelete={(task) => void deleteRecord(task)}
         />
       )}
     </div>

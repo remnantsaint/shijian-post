@@ -14,6 +14,7 @@ export interface Env {
 }
 export type AppEnv = { Bindings: Env; Variables: { user: User | null } };
 export interface TaskRow {
+  deleted_at: string | null;
   sender_from: string | null;
   id: string;
   user_id: string;

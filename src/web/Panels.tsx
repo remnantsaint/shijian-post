@@ -1,3 +1,4 @@
+import InviteManager from './InviteManager';
 import { senderFrom, senderDisplay } from '../shared/sender';
 import {
   ArrowUpRight,
@@ -5,7 +6,6 @@ import {
   Check,
   CircleHelp,
   Clock3,
-  Copy,
   FileText,
   Inbox,
   LockKeyhole,
@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { MailTask, SiteConfig, Template } from '../shared/schema';
-import { statusLabels } from '../shared/schema';
+import { statusLabels, canDeleteRecord } from '../shared/schema';
 import { EmptyState, shortDate, StatusBadge } from './components';
 export const starters: Template[] = [
   {
@@ -46,8 +46,10 @@ export function History({
   tasks,
   onDetail,
   onWrite,
+  onDelete,
 }: {
   tasks: MailTask[];
+  onDelete: (task: MailTask) => void;
   onDetail: (task: MailTask) => void;
   onWrite: () => void;
 }) {
@@ -163,16 +165,34 @@ export function History({
                     </td>
                     <td className="date-cell">{shortDate(task.targetAt)}</td>
                     <td>
-                      <button
-                        className="icon-button"
-                        aria-label={'查看 ' + task.subject}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onDetail(task);
-                        }}
-                      >
-                        <ArrowUpRight size={17} />
-                      </button>
+                      <div className="record-actions">
+                        <button
+                          className="icon-button"
+                          aria-label={'删除 ' + task.subject}
+                          disabled={!canDeleteRecord(task.status)}
+                          title={
+                            canDeleteRecord(task.status)
+                              ? '删除记录'
+                              : '待寄请先取消，正在处理或待核实的信暂不能删除'
+                          }
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDelete(task);
+                          }}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                        <button
+                          className="icon-button"
+                          aria-label={'查看 ' + task.subject}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDetail(task);
+                          }}
+                        >
+                          <ArrowUpRight size={17} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -277,12 +297,10 @@ export function Settings({
   config,
   onSaveName,
   onPause,
-  onInvite,
 }: {
   config: SiteConfig;
   onSaveName: (name: string) => Promise<void>;
   onPause: () => void;
-  onInvite: () => void;
 }) {
   const [nickname, setNickname] = useState(config.user?.senderName || '');
   const [saving, setSaving] = useState(false);
@@ -428,15 +446,7 @@ export function Settings({
             <h2>
               <UserPlus size={18} /> 管理邮局
             </h2>
-            <div className="setting-action">
-              <div>
-                <h3>邀请一个朋友</h3>
-                <p>生成一次性邀请码，有效期七天。</p>
-              </div>
-              <button className="button secondary" onClick={onInvite}>
-                <Copy size={15} /> 生成邀请
-              </button>
-            </div>
+            <InviteManager />
             <div className="setting-action">
               <div>
                 <h3>{config.paused ? '恢复寄信' : '让邮局休息一下'}</h3>

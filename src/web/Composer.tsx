@@ -31,6 +31,12 @@ export const emptyDraft: Draft = {
 };
 export default function Composer({
   draft,
+  guestDraftAvailable,
+  onUseGuestDraft,
+  draftStatus,
+  draftError,
+  draftReady,
+  onClearDraft,
   onChange,
   onSubmit,
   busy,
@@ -41,6 +47,12 @@ export default function Composer({
   onHistory,
 }: {
   draft: Draft;
+  guestDraftAvailable: boolean;
+  onUseGuestDraft: () => void;
+  draftStatus: string;
+  draftError: string;
+  draftReady: boolean;
+  onClearDraft: () => void;
   onChange: Dispatch<SetStateAction<Draft>>;
   onSubmit: () => void;
   busy: boolean;
@@ -70,14 +82,14 @@ export default function Composer({
             <h2>
               <Feather size={18} /> 写一封信
             </h2>
-            <button className="text-button" onClick={onTemplates}>
+            <button className="text-button" disabled={busy || uncertain} onClick={onTemplates}>
               从模板开始 <ArrowUpRight size={15} />
             </button>
           </div>
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              if (!processing) onSubmit();
+              if (!processing && draftReady) onSubmit();
             }}
           >
             <div className="field">
@@ -86,6 +98,7 @@ export default function Composer({
               </label>
               <input
                 id="recipient"
+                disabled={busy || uncertain || !draftReady}
                 type="email"
                 placeholder="收件人的邮箱地址"
                 value={draft.recipient}
@@ -102,6 +115,7 @@ export default function Composer({
               </label>
               <input
                 id="subject"
+                disabled={busy || uncertain || !draftReady}
                 placeholder="给这份心意起个名字"
                 value={draft.subject}
                 onChange={(e) => set('subject', e.target.value)}
@@ -121,13 +135,36 @@ export default function Composer({
               <LetterEditor
                 draft={draft}
                 onChange={onChange}
-                disabled={busy || uncertain}
+                disabled={busy || uncertain || !draftReady}
                 onProcessing={setProcessing}
               />
               <div className="editor-footer">
-                <span>文字会保留你的换行与段落</span>
+                <span>{draftStatus}</span>
+                <button
+                  type="button"
+                  className="draft-clear"
+                  disabled={busy || processing || !draftReady}
+                  onClick={onClearDraft}
+                >
+                  清空草稿
+                </button>
                 <span>{templateText(draft.body).length.toLocaleString()} / 20,000</span>
               </div>
+              {guestDraftAvailable && (
+                <button
+                  type="button"
+                  className="text-button"
+                  disabled={busy || uncertain || processing}
+                  onClick={onUseGuestDraft}
+                >
+                  使用登录前的另一份草稿
+                </button>
+              )}
+              {draftError && (
+                <p role="alert" className="image-error">
+                  {draftError}
+                </p>
+              )}
             </div>
             <div className="timing-label">什么时候寄出？</div>
             <div className="timing-options">
@@ -135,6 +172,7 @@ export default function Composer({
                 type="button"
                 className={draft.timing === 'now' ? 'timing selected' : 'timing'}
                 aria-pressed={draft.timing === 'now'}
+                disabled={busy || uncertain || !draftReady}
                 onClick={() => set('timing', 'now')}
               >
                 <Send size={17} />
@@ -148,6 +186,7 @@ export default function Composer({
                 type="button"
                 className={draft.timing === 'schedule' ? 'timing selected' : 'timing'}
                 aria-pressed={draft.timing === 'schedule'}
+                disabled={busy || uncertain || !draftReady}
                 onClick={() => set('timing', 'schedule')}
               >
                 <CalendarDays size={18} />
@@ -165,6 +204,7 @@ export default function Composer({
                 </label>
                 <input
                   id="send-at"
+                  disabled={busy || uncertain || !draftReady}
                   type="datetime-local"
                   required
                   value={draft.sendAt}
@@ -186,7 +226,7 @@ export default function Composer({
                 <button
                   type="submit"
                   className="button primary"
-                  disabled={busy || processing || config.paused}
+                  disabled={busy || processing || config.paused || !draftReady}
                 >
                   {busy ? <span className="spinner" /> : <Send size={17} />}{' '}
                   {busy

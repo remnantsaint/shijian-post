@@ -1,10 +1,11 @@
+import { publicInvites, invitationView, type InvitationRow } from './invitations';
 import { senderFrom } from '../shared/sender';
 import { cleanupImages } from './images';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { secureHeaders } from 'hono/secure-headers';
 import { z } from 'zod';
-import { mailSchema, templateSchema, profileSchema } from '../shared/schema';
+import { mailSchema, templateSchema, profileSchema, invitationSchema } from '../shared/schema';
 import { auth } from './auth';
 import type { AppEnv, Env, TaskRow, UserRow } from './types';
 import { taskView, userView } from './types';
@@ -41,6 +42,7 @@ app.get('/api/config', async (c) =>
     from: c.env.MAIL_FROM,
     senderFrom: senderFrom(c.env.MAIL_FROM, c.get('user')?.senderName || ''),
     paused: await paused(c.env),
+    publicInvites: await publicInvites(c.env),
   }),
 );
 app.route('/api/auth', auth);
@@ -76,7 +78,7 @@ app.route('/api/profile', profile);
 
 tasks.get('/', async (c) => {
   const result = await c.env.DB.prepare(
-    'SELECT * FROM tasks WHERE user_id=? ORDER BY created_at DESC LIMIT 100',
+    'SELECT * FROM tasks WHERE user_id=? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100',
   )
     .bind(c.get('user')!.id)
     .all<TaskRow>();
@@ -86,6 +88,7 @@ tasks.get('/:id', async (c) => {
   const task = await c.env.DB.prepare('SELECT * FROM tasks WHERE id=? AND user_id=?')
     .bind(c.req.param('id'), c.get('user')!.id)
     .first<TaskRow>();
+  if (task?.deleted_at) return c.json({ error: '这封信的记录已删除，不会再次执行' }, 410);
   return task ? c.json({ task: taskView(task) }) : c.json({ error: '未找到这封信' }, 404);
 });
 tasks.get('/:id/images/:imageId', async (c) => {
@@ -134,6 +137,7 @@ tasks.post('/', async (c) => {
     return c.json({ task: taskView(latest!), created }, created ? 201 : 200);
   } catch (error) {
     const code = error instanceof Error ? error.message : '';
+    if (code === 'TASK_DELETED') return c.json({ error: '这封信的记录已删除，不会再次提交' }, 410);
     if (code === 'ID_CONFLICT')
       return c.json({ error: '这个请求编号已使用，请先检查原任务记录' }, 409);
     if (code === 'INVALID_IMAGES')
@@ -167,6 +171,28 @@ tasks.post('/:id/cancel', async (c) => {
     ? c.json({ error: '这封信已经开始处理或已经结束，无法撤回' }, 409)
     : c.json({ error: '未找到这封信' }, 404);
 });
+tasks.delete('/:id', async (c) => {
+  const id = c.req.param('id'),
+    userId = c.get('user')!.id;
+  const now = new Date().toISOString();
+  const [updated] = await c.env.DB.batch([
+    c.env.DB.prepare(
+      "UPDATE tasks SET deleted_at=?,subject='',body='',images_metadata='[]',images_cleaned_at=?,sender_from=NULL WHERE id=? AND user_id=? AND deleted_at IS NULL AND status IN ('accepted','simulated','failed','cancelled','expired')",
+    ).bind(now, now, id, userId),
+    c.env.DB.prepare(
+      'DELETE FROM task_images WHERE task_id=? AND EXISTS(SELECT 1 FROM tasks WHERE id=? AND user_id=? AND deleted_at IS NOT NULL)',
+    ).bind(id, id, userId),
+  ]);
+  if (updated.meta.changes) return c.json({ ok: true });
+  const task = await c.env.DB.prepare('SELECT deleted_at FROM tasks WHERE id=? AND user_id=?')
+    .bind(id, userId)
+    .first<{ deleted_at: string | null }>();
+  if (task?.deleted_at) return c.json({ ok: true });
+  return task
+    ? c.json({ error: '待寄信请先取消；正在处理或结果待核实的信暂时不能删除' }, 409)
+    : c.json({ error: '未找到这封信' }, 404);
+});
+
 templates.get('/', async (c) => {
   const rows = await c.env.DB.prepare(
     'SELECT id,name,subject,body FROM templates WHERE user_id=? ORDER BY created_at DESC',
@@ -192,15 +218,59 @@ templates.delete('/:id', async (c) => {
     .run();
   return result.meta.changes ? c.json({ ok: true }) : c.json({ error: '未找到这个模板' }, 404);
 });
+admin.get('/invites', async (c) => {
+  const rows = await c.env.DB.prepare(
+    'SELECT * FROM invitations ORDER BY created_at DESC LIMIT 100',
+  ).all<InvitationRow>();
+  return c.json({ invitations: rows.results.map(invitationView) });
+});
 admin.post('/invites', async (c) => {
-  const code = token();
-  const expiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
+  const parsed = invitationSchema.safeParse(await c.req.json());
+  if (!parsed.success) return c.json({ error: '开通人数需要为 1 至 1000 的整数' }, 400);
+  const code = token(),
+    id = await digest(code);
+  const createdAt = new Date().toISOString(),
+    expiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
   await c.env.DB.prepare(
-    'INSERT INTO invitations(code_hash,created_by,created_at,expires_at) VALUES(?,?,?,?)',
+    'INSERT INTO invitations(code_hash,code,created_by,created_at,expires_at,max_uses,is_public) VALUES(?,?,?,?,?,?,?)',
   )
-    .bind(await digest(code), c.get('user')!.id, new Date().toISOString(), expiresAt)
+    .bind(
+      id,
+      code,
+      c.get('user')!.id,
+      createdAt,
+      expiresAt,
+      parsed.data.maxUses,
+      parsed.data.isPublic ? 1 : 0,
+    )
     .run();
-  return c.json({ code, expiresAt }, 201);
+  const row = await c.env.DB.prepare('SELECT * FROM invitations WHERE code_hash=?')
+    .bind(id)
+    .first<InvitationRow>();
+  return c.json({ invitation: invitationView(row!), code, expiresAt }, 201);
+});
+admin.post('/invites/:id/public', async (c) => {
+  const parsed = z
+    .object({ isPublic: z.boolean() })
+    .strict()
+    .safeParse(await c.req.json());
+  if (!parsed.success) return c.json({ error: '公开设置格式不正确' }, 400);
+  const row = await c.env.DB.prepare(
+    'UPDATE invitations SET is_public=? WHERE code_hash=? AND code IS NOT NULL RETURNING *',
+  )
+    .bind(parsed.data.isPublic ? 1 : 0, c.req.param('id'))
+    .first<InvitationRow>();
+  return row
+    ? c.json({ invitation: invitationView(row) })
+    : c.json({ error: '未找到邀请码，或旧邀请码没有保存原文' }, 404);
+});
+admin.post('/invites/:id/revoke', async (c) => {
+  const row = await c.env.DB.prepare(
+    'UPDATE invitations SET revoked_at=COALESCE(revoked_at,?),is_public=0 WHERE code_hash=? RETURNING *',
+  )
+    .bind(new Date().toISOString(), c.req.param('id'))
+    .first<InvitationRow>();
+  return row ? c.json({ invitation: invitationView(row) }) : c.json({ error: '未找到邀请码' }, 404);
 });
 admin.post('/settings', async (c) => {
   const data = z

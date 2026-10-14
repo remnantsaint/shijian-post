@@ -1,43 +1,37 @@
 {
-    "$schema": "node_modules/wrangler/config-schema.json",
-    "name": "manyou-mail",
-    "main": "src/worker/index.ts",
-    "compatibility_date": "2026-10-13",
-    "compatibility_flags": [
-        "nodejs_compat"
-    ],
-    "workers_dev": false,
-    "routes": [
-        {
-            "pattern": "email.remsait.com",
-            "custom_domain": true,
-        },
-    ],
-    "assets": {
-        "directory": "./dist/client",
-        "not_found_handling": "single-page-application",
-        "run_worker_first": [
-            "/api/*"
-        ],
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "shijian-post",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-10-13",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "email.remsait.com",
+      "custom_domain": true,
     },
-    "d1_databases": [
-        {
-            "binding": "DB",
-            "database_name": "manyou-mail",
-            "database_id": "ccaae795-eb00-4bcd-a7d2-1ce8648e15d0",
-            "migrations_dir": "migrations",
-        },
-    ],
-    "triggers": {
-        "crons": [
-            "* * * * *"
-        ],
+  ],
+  "assets": {
+    "directory": "./dist/client",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"],
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "manyou-mail",
+      "database_id": "ccaae795-eb00-4bcd-a7d2-1ce8648e15d0",
+      "migrations_dir": "migrations",
     },
-    "vars": {
-        "APP_URL": "https://email.remsait.com",
-        "ENVIRONMENT": "production",
-        "MAIL_MODE": "resend",
-        "MAIL_FROM": "柿间邮局 <letter@send.remsait.com>",
-        "ADMIN_GITHUB_LOGIN": "remnantsaint",
-    },
+  ],
+  "triggers": {
+    "crons": ["* * * * *"],
+  },
+  "vars": {
+    "APP_URL": "https://email.remsait.com",
+    "ENVIRONMENT": "production",
+    "MAIL_MODE": "resend",
+    "MAIL_FROM": "柿间邮局 <letter@send.remsait.com>",
+    "ADMIN_GITHUB_LOGIN": "remnantsaint",
+  },
 }

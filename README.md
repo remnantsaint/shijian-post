@@ -34,7 +34,7 @@ e2e/          桌面和手机浏览器验收
 docs/         完整搭建与部署指南
 ```
 
-仓库和 npm 包名为 shijian-post。线上 Worker 与数据库沿用 manyou-mail，改仓库名不会创建新的线上资源。
+仓库和 npm 包名为 shijian-post。线上 Worker 已命名为 shijian-post，D1 数据库仍沿用 manyou-mail。仓库、Worker 和数据库是独立资源。
 
 ## 本地开发
 

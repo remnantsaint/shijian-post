@@ -8,7 +8,7 @@
 
 开发顺序是：整理写信/模板/记录流程 → 实现登录与邀请码 → 实现任务保存、定时与防重复提交 → 完成本地模拟测试 → 配置线上账号和 DNS → 发布 → 实际检查邮件认证。
 
-品牌为“柿间邮局”，仓库名为 shijian-post。已上线的 Worker / D1 名称 manyou-mail 保持不变；不要为了重命名仓库而新建生产资源。
+品牌为“柿间邮局”，仓库名为 shijian-post。现有 Worker 已改名为 shijian-post；D1 数据库仍叫 manyou-mail。Worker 改名后要同步 wrangler.jsonc 顶层 name，数据库配置继续指向原 ID。
 
 ## 1. 准备工具和账号
 
@@ -25,7 +25,7 @@
 | 邮件发件域名 | send.remsait.com                   |
 | 发件地址     | 柿间邮局 <letter@send.remsait.com> |
 | GitHub 仓库  | remnantsaint/shijian-post          |
-| Worker 名称  | manyou-mail                        |
+| Worker 名称  | shijian-post                       |
 | D1 绑定名    | DB                                 |
 
 其他人复用项目时，使用自己的域名、管理员账号、数据库和密钥。不要把示例或维护者的数据库 ID 当成可访问凭据。
@@ -136,7 +136,7 @@ npx wrangler secret put GITHUB_CLIENT_SECRET
 npx wrangler secret put RESEND_API_KEY
 ```
 
-每条命令按提示输入对应值，不把密钥放进命令参数、代码或聊天。设置在同一个 manyou-mail Worker 下。
+每条命令按提示输入对应值，不把密钥放进命令参数、代码或聊天。设置在同一个 shijian-post Worker 下。
 
 Resend 域名验证通过后，将 MAIL_MODE 改为 resend，再执行 npm run deploy。
 
@@ -175,7 +175,7 @@ git push
 
 .gitignore 排除了 .dev.vars、.env、本地数据库、依赖、构建输出、日志和测试截图。Client Secret、API Key、会话令牌、邀请码和用户数据都不上传。数据库 ID、域名、Worker 名称、Client ID 和管理员用户名不是密钥。
 
-首次连接自动部署：Cloudflare → Workers & Pages → 已存在的 manyou-mail → Settings → Builds → Connect，授权 GitHub 并选择 remnantsaint/shijian-post。
+首次连接自动部署：Cloudflare → Workers & Pages → 已存在的 shijian-post → Settings → Builds → Connect，授权 GitHub 并选择 remnantsaint/shijian-post。
 
 | 构建项     | 填写                                           |
 | ---------- | ---------------------------------------------- |
@@ -185,7 +185,7 @@ git push
 | 构建命令   | npm run typecheck && npm test && npm run build |
 | 部署命令   | npx wrangler deploy                            |
 
-不要把 Cloudflare 项目名称改成 shijian-post：它应与 wrangler.jsonc 的 name=manyou-mail 一致。直接连接现有 Worker 能保留域名、D1 和线上 Secrets。
+Cloudflare Worker 名称应与 wrangler.jsonc 的 name=shijian-post 一致；D1 数据库的 manyou-mail 和 database_id 保持原样。直接连接现有 Worker 能保留域名、D1 和线上 Secrets。
 
 推送 main 后在 Cloudflare Builds 查看状态，部署成功才代表网站更新。实际 Worker 的凭据继续放在 Variables and Secrets，不需要将 API Key 上传到仓库，也不需要放进前端构建代码。
 

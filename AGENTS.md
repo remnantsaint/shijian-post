@@ -6,4 +6,4 @@ Local .dev.vars uses mock delivery. Never print or commit secrets. Production se
 D1 task IDs and atomic queued-to-sending claims prevent duplicates. Uncertain external submissions must never be automatically retried. Never treat provider acceptance as inbox delivery. Cancellation cannot recall accepted mail.
 Do not delete task tombstones or reset live state to retry mail. Do not deploy or change DNS without an authorized target and existing credentials. Preserve the repository Git history.
 
-Repository/package name is shijian-post. Existing production Worker and D1 retain manyou-mail; do not rename or recreate them as part of repository branding. Setup and deployment instructions are in docs/SETUP.md.
+Repository/package name is shijian-post. The existing production Worker is now shijian-post after the user renamed it; D1 still retains manyou-mail. Keep their configured names and database ID aligned with those existing resources. Setup and deployment instructions are in docs/SETUP.md.

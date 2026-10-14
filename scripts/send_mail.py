@@ -70,7 +70,14 @@ def custom_content():
     if (len(subject) > MAX_CUSTOM_SUBJECT_CHARACTERS
             or any(not character.isprintable() for character in subject)):
         raise ConfigurationError("自定义邮件主题必须是单行文本，且不能超过 200 个字符")
-    if not body.strip():
+    # Only an intentionally blank workflow field (or absent legacy body)
+    # selects the prepared letter. Explicit invalid custom payloads fail closed.
+    explicit_custom_body = not in_actions and "CUSTOM_MAIL_BODY" in os.environ
+    if explicit_custom_body and not body.strip():
+        raise ConfigurationError("自定义邮件正文不能为空")
+    if body and not body.strip():
+        raise ConfigurationError("自定义邮件正文不能为空")
+    if not body:
         from .dragon_letters import prepared_letter
         default_subject, body = prepared_letter()
         if not subject.strip():

@@ -216,6 +216,31 @@ class RunnerTests(unittest.TestCase):
     def event_write(self,**values):
         self.event.write_text(json.dumps({'inputs':values}))
 
+    def test_consolidated_send_uses_selected_style(self):
+        for style,kind in [('小澪预设信','custom'),('随机来信','random'),('小龙娘随机故事','dragon')]:
+            with self.subTest(style=style):
+                self.api=TaskAPI()
+                self.event_write(action='发送邮件',mail_style=style,custom_body='test body')
+                rid=task_runner.prepare(self.api,now=NOW)
+                self.assertEqual(TaskStore(self.api).get(rid)['content']['kind'],kind)
+
+    def test_consolidated_repeat_requires_rule_and_preserves_kind(self):
+        self.event_write(action='循环发送',mail_style='小龙娘随机故事')
+        with self.assertRaises(TaskError):
+            task_runner.prepare(self.api,now=NOW)
+        self.event_write(action='循环发送',mail_style='小龙娘随机故事',
+                         repeat_rule='every:2h')
+        rid=task_runner.prepare(self.api,now=NOW)
+        task=TaskStore(self.api).get(rid)
+        self.assertEqual(task['content']['kind'],'dragon')
+        self.assertIsNotNone(task['repeat'])
+
+    def test_unknown_mail_style_rejected_without_task(self):
+        self.event_write(action='发送邮件',mail_style='invalid')
+        with self.assertRaises(TaskError):
+            task_runner.prepare(self.api,now=NOW)
+        self.assertFalse(TaskStore(self.api).load()[0]['tasks'])
+
     def test_blank_custom_timing_is_immediate_and_nonrepeating(self):
         self.event_write(action='发送自定义邮件', custom_subject='title', custom_body='body')
         with patch.object(task_runner, 'PREPARED_TIMING', ''), patch.object(task_runner, 'PREPARED_MODE', 'A'):

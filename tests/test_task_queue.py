@@ -216,6 +216,32 @@ class RunnerTests(unittest.TestCase):
     def event_write(self,**values):
         self.event.write_text(json.dumps({'inputs':values}))
 
+    def test_blank_custom_timing_is_immediate_and_nonrepeating(self):
+        self.event_write(action='发送自定义邮件', custom_subject='title', custom_body='body')
+        with patch.object(task_runner, 'PREPARED_TIMING', ''), patch.object(task_runner, 'PREPARED_MODE', 'A'):
+            rid=task_runner.prepare(self.api,now=NOW)
+        task=TaskStore(self.api).get(rid)
+        self.assertEqual(task['target_at'],NOW.isoformat().replace('+00:00','Z'))
+        self.assertIsNone(task['repeat'])
+
+    def test_prepared_time_and_manual_override(self):
+        self.event_write(action='发送自定义邮件',custom_body='body')
+        with patch.object(task_runner,'PREPARED_TIMING','after:3d'), patch.object(task_runner,'PREPARED_MODE','A'):
+            self.assertIsNone(task_runner.prepare(self.api,now=NOW))
+        task=next(iter(self.api.queue['tasks'].values()))
+        self.assertEqual(task['target_at'],(NOW+timedelta(days=3)).isoformat().replace('+00:00','Z'))
+        self.assertIsNone(task['repeat'])
+        self.event_write(action='发送自定义邮件',timing='now',custom_body='body',request_id=str(uuid.uuid4()))
+        with patch.object(task_runner,'PREPARED_TIMING','after:3d'), patch.object(task_runner,'PREPARED_MODE','A'):
+            rid=task_runner.prepare(self.api,now=NOW)
+        self.assertEqual(TaskStore(self.api).get(rid)['target_at'],NOW.isoformat().replace('+00:00','Z'))
+
+    def test_unavailable_reminder_mode_fails_without_creating_task(self):
+        self.event_write(action='发送自定义邮件',custom_body='body')
+        with patch.object(task_runner,'PREPARED_MODE','B'),self.assertRaises(TaskError):
+            task_runner.prepare(self.api,now=NOW)
+        self.assertFalse(TaskStore(self.api).load()[0]['tasks'])
+
     @patch('scripts.send_mail.smtplib.SMTP_SSL')
     def test_future_custom_payload_private_then_unified_delivery_and_cleanup(self,smtp):
         smtp.return_value.send_message.return_value={}

@@ -23,7 +23,7 @@ run-name: ${{ github.event_name == 'schedule' && '定时检查' || github.event_
         - 取消任务
         default: 查看状态
       timing:
-        description: 目标时间：留空自定义邮件使用预设随机时间；可填 now、after:10m、带时区时间或 random:5m:730d
+        description: 目标时间：留空优先使用小澪预设，未预设则立即发送；可填 now、after:10m、带时区时间或 random:5m:730d
         type: string
         default: ''
         required: false

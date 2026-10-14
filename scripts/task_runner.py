@@ -3,7 +3,6 @@ import copy
 import hashlib
 import json
 import os
-import random
 from pathlib import Path
 import shutil
 import sys
@@ -18,23 +17,22 @@ from . import send_mail, send_letter
 
 UNIFIED_WORKFLOW_NAME='邮件机器人（统一入口）'
 
-# A single custom-mail dispatch schedules one letter. The long tail is intentional.
-# These are non-recurring windows, measured from the workflow click.
-PREPARED_TIMING = ''  # Optional explicit timing, e.g. after:3d or a zoned ISO datetime.
-SURPRISE_WINDOWS = ((70, '5m', '3d'), (20, '3d', '30d'),
-                    (8, '30d', '180d'), (2, '180d', '730d'))
+# Default mode A: schedule delivery through GitHub. A blank timing is immediate
+# unless the prepared letter explicitly specifies a time. Mode B (a delayed
+# Foxmail reminder after immediate SMTP delivery) has no verified remote API.
+PREPARED_TIMING = ''  # 'now', 'after:3d', zoned ISO time, or 'random:5m:730d'.
+PREPARED_MODE = 'A'  # A=GitHub delivery; B requires external reminder integration.
 
 
 def custom_default_timing():
-    if PREPARED_TIMING.strip():
-        return PREPARED_TIMING.strip()
-    draw = random.SystemRandom().randrange(100)
-    for weight, low, high in SURPRISE_WINDOWS:
-        if draw < weight:
-            return f'random:{low}:{high}'
-        draw -= weight
-    raise TaskError('默认随机时间配置无效。')
+    return PREPARED_TIMING.strip() or 'now'
 
+
+def custom_delivery_mode():
+    mode = PREPARED_MODE.strip().upper() or 'A'
+    if mode not in {'A', 'B'}:
+        raise TaskError('预设发送模式无效，仅支持 A 或 B。')
+    return mode
 
 
 def api_from_environment():
@@ -111,6 +109,8 @@ def prepare(api,*,event=None,now=None):
     if action=='周期发送' and not event.get('repeat_rule'):raise TaskError('周期发送必须填写重复规则，例如 every:2h。')
     if action=='指定时间发送' and not event.get('timing'):raise TaskError('指定时间发送必须填写目标时间。')
     kind=kinds[action]
+    if action=='发送自定义邮件' and custom_delivery_mode()=='B':
+        raise TaskError('B 延迟提醒尚未接入 Foxmail 自动提醒接口；未发送邮件，也未创建任务。请选择 A。')
     timing=event.get('timing') or (custom_default_timing() if action=='发送自定义邮件' else 'now')
     repeat_text=event.get('repeat_rule') or ''
     # Preserve old API invocations without preserving a separate scheduler.

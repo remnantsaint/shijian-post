@@ -95,7 +95,7 @@ class MailTests(unittest.TestCase):
 
     @patch("scripts.send_mail.smtplib.SMTP_SSL")
     def test_custom_invalid_body_rejects_before_smtp_without_echoing_payload(self, smtp):
-        for body in ("", " \n\t", "private-body\0", "private-body" + "文" * 100000,
+        for body in (" \n\t", "private-body\0", "private-body" + "文" * 100000,
                      "private-body\ud800"):
             environment = dict(os.environ, MESSAGE_TYPE="custom", MAIL_SUBJECT="private-title", MAIL_BODY=body)
             with self.subTest(body_length=len(body)), patch("scripts.send_mail.os.environ", environment):
@@ -105,6 +105,22 @@ class MailTests(unittest.TestCase):
             self.assertNotIn("private-body", output)
             self.assertNotIn("private-title", output)
         smtp.assert_not_called()
+
+    @patch("scripts.send_mail.smtplib.SMTP_SSL")
+    def test_blank_workflow_body_uses_prepared_letter(self, smtp):
+        smtp.return_value.send_message.return_value = {}
+        with tempfile.TemporaryDirectory() as directory:
+            event = Path(directory) / "event.json"
+            event.write_text(json.dumps({"inputs":{"custom_subject":"","custom_body":""}}),encoding="utf-8")
+            with patch.dict(os.environ, {"MESSAGE_TYPE":"custom","GITHUB_ACTIONS":"true",
+                                         "GITHUB_EVENT_PATH":str(event)}):
+                result, output = self.run_main()
+        self.assertEqual(result,0)
+        from scripts.dragon_letters import prepared_letter
+        title, body = prepared_letter()
+        sent = smtp.return_value.send_message.call_args.args[0]
+        self.assertEqual(sent["Subject"],title)
+        self.assertIn(body,sent.get_content())
 
     def test_custom_body_accepts_size_limit_and_empty_subject_uses_default(self):
         with patch.dict(os.environ, {"MAIL_BODY": "文" * 100000, "MAIL_SUBJECT": "   "}):

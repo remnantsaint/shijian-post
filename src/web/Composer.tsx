@@ -214,7 +214,7 @@ export default function Composer({
             subject={draft.subject}
             body={draft.body}
             recipient={draft.recipient}
-            from={config.from}
+            from={config.senderFrom || config.from}
             images={draft.images}
           />
           <div className="preview-foot">

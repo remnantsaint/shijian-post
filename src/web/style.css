@@ -2106,3 +2106,29 @@ tbody tr:hover {
 .image-toolbar input[hidden] {
   display: none;
 }
+
+.sender-settings {
+  margin-top: 24px;
+}
+.sender-settings .field {
+  margin-bottom: 16px;
+}
+.sender-preview {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  margin-bottom: 16px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  overflow-wrap: anywhere;
+}
+.sender-preview > span {
+  font-size: 10px;
+  color: var(--muted);
+}
+.sender-preview > strong {
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.8;
+}

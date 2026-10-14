@@ -1,0 +1,2 @@
+ALTER TABLE users ADD COLUMN sender_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN sender_from TEXT;

@@ -14,6 +14,7 @@ export interface Env {
 }
 export type AppEnv = { Bindings: Env; Variables: { user: User | null } };
 export interface TaskRow {
+  sender_from: string | null;
   id: string;
   user_id: string;
   recipient: string;
@@ -33,6 +34,7 @@ export interface TaskRow {
   images_cleaned_at: string | null;
 }
 export interface UserRow {
+  sender_name: string;
   id: string;
   github_id: string;
   github_login: string;
@@ -44,6 +46,7 @@ export interface UserRow {
   created_at: string;
 }
 export const userView = (row: UserRow): User => ({
+  senderName: row.sender_name || '',
   id: row.id,
   login: row.github_login,
   name: row.name,
@@ -51,6 +54,7 @@ export const userView = (row: UserRow): User => ({
   active: Boolean(row.active),
 });
 export const taskView = (row: TaskRow) => ({
+  senderFrom: row.sender_from || null,
   images: (JSON.parse(row.images_metadata || '[]') as ImageInfo[]).map(
     ({ id, name, contentType, size, width, height }) => ({
       id,

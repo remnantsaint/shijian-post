@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { Hono } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import type { AppEnv, UserRow } from './types';
@@ -128,12 +129,19 @@ auth.post('/logout', async (c) => {
 auth.post('/demo', async (c) => {
   if (!isLocal(c.env, c.req.url) || c.env.MAIL_MODE !== 'mock')
     return c.json({ error: '未找到此入口' }, 404);
+  const parsed = z
+    .object({ role: z.enum(['admin', 'member']).optional() })
+    .strict()
+    .safeParse(await c.req.json());
+  if (!parsed.success) return c.json({ error: '预览身份格式不正确' }, 400);
+  const role = parsed.data.role || 'admin';
+  const id = role === 'admin' ? 'local-demo' : 'local-member';
   await c.env.DB.prepare(
-    "INSERT OR IGNORE INTO users(id,github_id,github_login,name,role,active,created_at) VALUES('local-demo','local-demo','local-demo','本地体验者','admin',1,?)",
+    'INSERT OR IGNORE INTO users(id,github_id,github_login,name,role,active,created_at) VALUES(?,?,?,?,?,1,?)',
   )
-    .bind(new Date().toISOString())
+    .bind(id, id, id, role === 'admin' ? '体验访客' : '寄信人预览', role, new Date().toISOString())
     .run();
-  await createSession(c, 'local-demo');
+  await createSession(c, id);
   return c.json({ ok: true });
 });
 auth.post('/invite', async (c) => {

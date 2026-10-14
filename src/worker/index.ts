@@ -1,12 +1,13 @@
+import { senderFrom } from '../shared/sender';
 import { cleanupImages } from './images';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { secureHeaders } from 'hono/secure-headers';
 import { z } from 'zod';
-import { mailSchema, templateSchema } from '../shared/schema';
+import { mailSchema, templateSchema, profileSchema } from '../shared/schema';
 import { auth } from './auth';
-import type { AppEnv, Env, TaskRow } from './types';
-import { taskView } from './types';
+import type { AppEnv, Env, TaskRow, UserRow } from './types';
+import { taskView, userView } from './types';
 import { appOrigin, currentUser, digest, isLocal, token } from './security';
 import { createTask, dispatchTask, mailMode, paused, runDueTasks } from './mail';
 
@@ -38,6 +39,7 @@ app.get('/api/config', async (c) =>
       c.env.GITHUB_CLIENT_ID && c.env.GITHUB_CLIENT_SECRET && c.env.ADMIN_GITHUB_LOGIN,
     ),
     from: c.env.MAIL_FROM,
+    senderFrom: senderFrom(c.env.MAIL_FROM, c.get('user')?.senderName || ''),
     paused: await paused(c.env),
   }),
 );
@@ -46,7 +48,8 @@ app.route('/api/auth', auth);
 const tasks = new Hono<AppEnv>();
 const templates = new Hono<AppEnv>();
 const admin = new Hono<AppEnv>();
-for (const router of [tasks, templates, admin])
+const profile = new Hono<AppEnv>();
+for (const router of [tasks, templates, admin, profile])
   router.use('*', async (c, next) => {
     const user = c.get('user');
     if (!user) return c.json({ error: '请先登录后再操作' }, 401);
@@ -57,6 +60,20 @@ admin.use('*', async (c, next) => {
   if (c.get('user')?.role !== 'admin') return c.json({ error: '仅管理员可操作' }, 403);
   await next();
 });
+profile.post('/', async (c) => {
+  const parsed = profileSchema.safeParse(await c.req.json());
+  if (!parsed.success) return c.json({ error: '昵称最多 30 字，不能包含换行、引号或尖括号' }, 400);
+  const updated = await c.env.DB.prepare('UPDATE users SET sender_name=? WHERE id=? RETURNING *')
+    .bind(parsed.data.senderName, c.get('user')!.id)
+    .first<UserRow>();
+  if (!updated) return c.json({ error: '账号已失效，请重新登录' }, 401);
+  return c.json({
+    user: userView(updated),
+    senderFrom: senderFrom(c.env.MAIL_FROM, updated.sender_name),
+  });
+});
+app.route('/api/profile', profile);
+
 tasks.get('/', async (c) => {
   const result = await c.env.DB.prepare(
     'SELECT * FROM tasks WHERE user_id=? ORDER BY created_at DESC LIMIT 100',

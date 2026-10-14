@@ -51,6 +51,15 @@ export const templateSchema = z
     body: mailSchema.shape.body,
   })
   .strict();
+export const profileSchema = z
+  .object({
+    senderName: z
+      .string()
+      .trim()
+      .max(30)
+      .refine((v) => !/[\x00-\x1f\x7f<>"\\]/.test(v), '昵称不能包含换行或邮件地址符号'),
+  })
+  .strict();
 export type MailInput = z.infer<typeof mailSchema>;
 export type Status =
   | 'queued'
@@ -62,6 +71,7 @@ export type Status =
   | 'cancelled'
   | 'expired';
 export interface User {
+  senderName: string;
   id: string;
   login: string;
   name: string;
@@ -69,6 +79,7 @@ export interface User {
   active: boolean;
 }
 export interface MailTask {
+  senderFrom: string | null;
   images: ImageInfo[];
   imagesAvailable: boolean;
   id: string;
@@ -89,6 +100,7 @@ export interface Template {
   body: string;
 }
 export interface SiteConfig {
+  senderFrom: string;
   user: User | null;
   demoAvailable: boolean;
   mailMode: 'mock' | 'resend' | 'disabled';

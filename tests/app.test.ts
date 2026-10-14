@@ -766,3 +766,103 @@ describe('正文图片和存储生命周期', () => {
     expect(await imageCount(input.id)).toBe(1);
   });
 });
+
+describe('寄件昵称与成员设置', () => {
+  it('saves only the current user profile and keeps the fixed address', async () => {
+    const other = await otherUser();
+    const saved = await request('/profile', 'POST', { senderName: '  小王  ' }, other);
+    expect(saved.status).toBe(200);
+    expect(await saved.json()).toMatchObject({
+      user: { login: 'other', senderName: '小王', role: 'member' },
+      senderFrom: '"小王 · 柿间邮局" <letter@send.example.com>',
+    });
+    const config = await (await request('/config', 'GET', undefined, other)).json();
+    expect(config).toMatchObject({
+      user: { senderName: '小王' },
+      from: '柿间邮局 <letter@send.example.com>',
+      senderFrom: '"小王 · 柿间邮局" <letter@send.example.com>',
+    });
+    expect((await request('/admin/settings', 'POST', { paused: true }, other)).status).toBe(403);
+    expect((await request('/admin/invites', 'POST', {}, other)).status).toBe(403);
+    expect(await db.prepare("SELECT sender_name FROM users WHERE id='local-demo'").first()).toEqual(
+      { sender_name: '' },
+    );
+    expect((await request('/profile', 'POST', { senderName: '' }, other)).status).toBe(200);
+    expect(await (await request('/config', 'GET', undefined, other)).json()).toMatchObject({
+      senderFrom: '柿间邮局 <letter@send.example.com>',
+    });
+  });
+  it('rejects account/address overrides, anonymous or inactive users and header injection', async () => {
+    expect((await request('/profile', 'POST', { senderName: 'x' }, '')).status).toBe(401);
+    expect(
+      (await request('/profile', 'POST', { senderName: 'x' }, await otherUser(false))).status,
+    ).toBe(403);
+    for (const input of [
+      { senderName: '昵称', userId: 'other' },
+      { senderName: '昵称', role: 'admin' },
+      { senderName: '昵称', from: 'x@evil.example' },
+      { senderName: '名字\r\nBcc: x@example.com' },
+      { senderName: '<x@example.com>' },
+      { senderName: '"someone"' },
+      { senderName: 'x'.repeat(31) },
+      { senderName: 1 },
+    ])
+      expect((await request('/profile', 'POST', input)).status).toBe(400);
+    expect(await db.prepare("SELECT sender_name FROM users WHERE id='local-demo'").first()).toEqual(
+      { sender_name: '' },
+    );
+  });
+  it('snapshots identity when creating a task and preserves it across changes and replays', async () => {
+    await request('/profile', 'POST', { senderName: '西柿' });
+    const input = payload();
+    await request('/tasks', 'POST', input);
+    await request('/profile', 'POST', { senderName: '新昵称' });
+    expect((await request('/tasks', 'POST', input)).status).toBe(200);
+    expect((await row(input.id)).sender_from).toBe('"西柿 · 柿间邮局" <letter@send.example.com>');
+    await due(input.id);
+    await dispatchTask(engineEnv(), input.id, {
+      fetcher: async (_url, init) => {
+        expect(JSON.parse(String(init?.body)).from).toBe(
+          '"西柿 · 柿间邮局" <letter@send.example.com>',
+        );
+        return Response.json({ id: 'nickname-receipt' });
+      },
+    });
+    const newer = await create();
+    expect((await row(newer.task.id)).sender_from).toBe(
+      '"新昵称 · 柿间邮局" <letter@send.example.com>',
+    );
+  });
+  it('uses default identity for legacy tasks and RFC quoting for punctuation in names', async () => {
+    const old = await create();
+    await db.prepare('UPDATE tasks SET sender_from=NULL WHERE id=?').bind(old.task.id).run();
+    await request('/profile', 'POST', { senderName: '小王, 小李' });
+    await due(old.task.id);
+    await dispatchTask(engineEnv(), old.task.id, {
+      fetcher: async (_url, init) => {
+        expect(JSON.parse(String(init?.body)).from).toBe('柿间邮局 <letter@send.example.com>');
+        return Response.json({ id: 'legacy-receipt' });
+      },
+    });
+    const newer = await create();
+    expect((await row(newer.task.id)).sender_from).toBe(
+      '"小王, 小李 · 柿间邮局" <letter@send.example.com>',
+    );
+  });
+  it('previews an activated member in mock development with no admin privileges', async () => {
+    const login = await request('/auth/demo', 'POST', { role: 'member' }, '');
+    expect(login.status).toBe(200);
+    const member = login.headers.get('Set-Cookie')!.split(';')[0];
+    expect(await (await request('/config', 'GET', undefined, member)).json()).toMatchObject({
+      user: { id: 'local-member', role: 'member', active: true },
+    });
+    expect((await request('/tasks', 'POST', payload(), member)).status).toBe(201);
+    expect((await request('/admin/invites', 'POST', {}, member)).status).toBe(403);
+    const publicLogin = await mf.dispatchFetch('https://email.example.com/api/auth/demo', {
+      method: 'POST',
+      headers: { Origin: origin, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'admin' }),
+    });
+    expect(publicLogin.status).toBe(404);
+  });
+});

@@ -1,3 +1,4 @@
+import { senderFrom, senderDisplay } from '../shared/sender';
 import {
   ArrowUpRight,
   BookOpen,
@@ -17,7 +18,7 @@ import {
   Trash2,
   UserPlus,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { MailTask, SiteConfig, Template } from '../shared/schema';
 import { statusLabels } from '../shared/schema';
 import { EmptyState, shortDate, StatusBadge } from './components';
@@ -274,15 +275,26 @@ export function Templates({
 }
 export function Settings({
   config,
+  onSaveName,
   onPause,
   onInvite,
 }: {
   config: SiteConfig;
+  onSaveName: (name: string) => Promise<void>;
   onPause: () => void;
   onInvite: () => void;
 }) {
-  const previewUser = config.user?.id === 'local-demo';
-  const displayName = previewUser ? '体验访客' : config.user?.name;
+  const [nickname, setNickname] = useState(config.user?.senderName || '');
+  const [saving, setSaving] = useState(false);
+  const [nameError, setNameError] = useState('');
+  useEffect(() => {
+    setNickname(config.user?.senderName || '');
+    setNameError('');
+  }, [config.user?.id, config.user?.senderName]);
+  const previewUser = Boolean(
+    config.user && ['local-demo', 'local-member'].includes(config.user.id),
+  );
+  const displayName = config.user?.id === 'local-demo' ? '体验访客' : config.user?.name;
   return (
     <>
       <div className="page-title">
@@ -328,10 +340,62 @@ export function Settings({
           <h2>
             <Mail size={18} /> 寄件身份
           </h2>
-          <label>发件人</label>
+          <label>发件邮箱</label>
           <p className="from-address">
             {config.from.match(/<([^>]+)>/)?.[1] || config.from || '尚未设置'}
           </p>
+          <form
+            className="sender-settings"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (saving || !config.user?.active) return;
+              setSaving(true);
+              setNameError('');
+              try {
+                await onSaveName(nickname);
+              } catch (error) {
+                setNameError((error as Error).message);
+              } finally {
+                setSaving(false);
+              }
+            }}
+          >
+            <div className="field">
+              <label htmlFor="sender-name">寄件昵称</label>
+              <input
+                id="sender-name"
+                value={nickname}
+                maxLength={30}
+                placeholder="例如：西柿"
+                disabled={!config.user?.active || saving}
+                onChange={(e) => {
+                  setNickname(e.target.value);
+                  setNameError('');
+                }}
+              />
+              <p className="field-note">留空使用“柿间邮局”，修改仅影响之后新建的信。</p>
+            </div>
+            <div className="sender-preview">
+              <span>收件人看到</span>
+              <strong>{senderDisplay(senderFrom(config.from, nickname.trim()))}</strong>
+            </div>
+            <button
+              type="submit"
+              className="button secondary"
+              disabled={
+                !config.user?.active ||
+                saving ||
+                nickname.trim() === (config.user?.senderName || '')
+              }
+            >
+              {saving ? '保存中…' : '保存昵称'}
+            </button>
+            {nameError && (
+              <p role="alert" className="image-error">
+                {nameError}
+              </p>
+            )}
+          </form>
           <dl>
             <div>
               <dt>投递服务</dt>
@@ -357,7 +421,7 @@ export function Settings({
               </dd>
             </div>
           </dl>
-          <p className="fine-print">发件身份由邮局统一配置，收件人可以自由填写。</p>
+          <p className="fine-print">发件邮箱由邮局统一配置，寄件昵称和收件人由你填写。</p>
         </section>
         {config.user?.role === 'admin' && (
           <section className="panel settings-card admin-card">

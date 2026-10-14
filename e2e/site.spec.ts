@@ -223,3 +223,80 @@ test('mobile chooses images at the end, removes them and rejects a fourth image'
   await expect(page.locator('.editor-image')).toHaveCount(2);
   await context.close();
 });
+
+test('administrator saves a sender nickname and reloads it from the account', async ({ page }) => {
+  await enter(page);
+  await page.getByRole('button', { name: '邮局设置', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '管理邮局', exact: true })).toBeVisible();
+  const nickname = '西柿界面' + Date.now().toString().slice(-4);
+  await page.getByLabel('寄件昵称').fill(nickname);
+  await expect(page.locator('.sender-preview')).toContainText(nickname + ' · 柿间邮局');
+  await page.getByRole('button', { name: '保存昵称', exact: true }).click();
+  await expect(page.getByRole('button', { name: '保存昵称', exact: true })).toBeDisabled();
+  await page.reload();
+  await page.getByRole('button', { name: '邮局设置', exact: true }).click();
+  await expect(page.getByLabel('寄件昵称')).toHaveValue(nickname);
+  const config = await (await page.request.get('/api/config')).json();
+  expect(config.user.senderName).toBe(nickname);
+  expect(config.user.role).toBe('admin');
+  await page.getByLabel('寄件昵称').fill('');
+  await page.getByRole('button', { name: '保存昵称', exact: true }).click();
+  await expect(page.locator('.sender-preview')).toContainText(config.from);
+});
+test('ordinary member preview saves a nickname, cannot manage the post office and sees only their own tasks', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await page.goto('/');
+  await page.getByRole('button', { name: '登录邮局', exact: true }).click();
+  await page.getByRole('button', { name: '普通寄信人预览 · 不发送邮件', exact: true }).click();
+  await expect(page.getByRole('button', { name: '退出登录', exact: true })).toBeVisible();
+  const origin = 'http://127.0.0.1:5173';
+  const reset = await page.request.post('/api/profile', {
+    data: { senderName: '' },
+    headers: { Origin: origin },
+  });
+  expect(reset.status()).toBe(200);
+  await page.reload();
+  await page.getByRole('button', { name: '邮局设置', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '寄信人预览', exact: true })).toBeVisible();
+  await expect(page.locator('.settings-card').getByText('寄信人', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '管理邮局', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '生成邀请', exact: true })).toHaveCount(0);
+  expect(
+    (
+      await page.request.post('/api/admin/invites', { data: {}, headers: { Origin: origin } })
+    ).status(),
+  ).toBe(403);
+  await page.getByLabel('寄件昵称').fill('小王');
+  await page.getByRole('button', { name: '保存昵称', exact: true }).click();
+  await expect(page.getByRole('button', { name: '保存昵称', exact: true })).toBeDisabled();
+  const config = await (await page.request.get('/api/config')).json();
+  expect(config.user.role).toBe('member');
+  expect(config.user.senderName).toBe('小王');
+  if (await page.getByRole('button', { name: '关闭提示', exact: true }).isVisible())
+    await page.getByRole('button', { name: '关闭提示', exact: true }).click();
+  await page.locator('.workspace').screenshot({ path: 'test-results/member-settings.png' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.screenshot({ path: 'test-results/member-settings-mobile.png', fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await page.getByRole('button', { name: '写一封信', exact: true }).click();
+  const title = '成员昵称验收 ' + Date.now();
+  await page.getByLabel('寄给谁').fill('member-test@example.com');
+  await page.getByLabel('信的标题').fill(title);
+  await page.getByLabel('想说的话').fill('模拟验证昵称，没有发送真实邮件。');
+  const response = page.waitForResponse(
+    (r) => r.url().endsWith('/api/tasks') && r.request().method() === 'POST',
+  );
+  await page.getByRole('button', { name: '寄出这封信', exact: true }).click();
+  const saved = await (await response).json();
+  expect(saved.task.status).toBe('simulated');
+  expect(saved.task.senderFrom).toContain('小王 · 柿间邮局');
+  await page.getByRole('button', { name: '去信件记录看看' }).click();
+  await page.getByRole('textbox', { name: '搜索信件' }).fill(title);
+  await page.getByRole('button', { name: title, exact: true }).click();
+  await expect(page.getByRole('dialog').locator('.task-facts')).toContainText('小王 · 柿间邮局');
+});

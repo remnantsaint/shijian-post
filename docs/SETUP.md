@@ -223,6 +223,30 @@ migration apply 会记录已执行的 SQL，重复运行不会重复加表或删
 
 [Resend 官方：CID 内嵌图片](https://resend.com/changelog/embed-images-using-cid)
 
+## 寄件昵称升级与成员预览
+
+本次新增 migrations/0003_sender_nickname.sql：users.sender_name 保存个人昵称；tasks.sender_from 保存创建时的完整发件身份。已有待寄信件按原站点发件身份发送，不修改历史记录；昵称不会随 GitHub 账号信息更新被覆盖。
+
+先在项目目录验证，再迁移线上数据库。自动部署连接 main 时务必先迁移，成功后再推送：
+
+```powershell
+npm run db:migrate
+npm run typecheck
+npm test
+npm run test:e2e
+npm run build
+npm run db:migrate:remote
+git add .
+git commit -m "Add personal sender nicknames"
+git push
+```
+
+昵称在“邮局设置 → 寄件身份”保存，最多 30 字。留空使用默认名称，填写后显示为“昵称 · 柿间邮局”。发件邮箱仍为站点验证过的邮箱；成员不能修改邮箱、其他人的昵称或管理员权限。更改昵称仅影响之后新建的信，不改变已有待寄信件。邮箱客户端的“代发”提示不会因此消失。
+
+只有一个 GitHub 账号也可以在开发环境查看普通成员的实际页面：npm run dev 后，点击“登录邮局” → “普通寄信人预览 · 不发送邮件” → “邮局设置”。想查看管理员界面时，先退出，再选择“预览邮局 · 不发送邮件”。两种预览使用不同账号，信件、模板、昵称分别保存；管理员操作在普通成员界面隐藏，后端也拒绝成员调用。
+
+开发预览仅在 development、mock 和 localhost 同时满足时开放；生产网站保持 GitHub 登录与邀请码激活。
+
 ## 换电脑与日常开发
 
 安装 Git 和 Node.js，克隆仓库后执行 npm ci、npm run setup、npm run dev。新电脑生成独立本地数据，不会重置线上 D1。

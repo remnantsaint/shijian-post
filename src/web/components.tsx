@@ -1,3 +1,4 @@
+import { senderDisplay } from '../shared/sender';
 import { bodyParts, type ImageInfo, type ImageInput } from '../shared/images';
 import { ArrowUpRight, Check, Clock3, Mail, Send, X } from 'lucide-react';
 import type { MailTask, SiteConfig } from '../shared/schema';
@@ -160,12 +161,16 @@ export function TaskDetail({
         subject={task.subject}
         body={task.body}
         recipient={task.recipient}
-        from={config.from}
+        from={task.senderFrom || config.from}
         images={task.images}
         imageUrl={(id) => (task.imagesAvailable ? `/api/tasks/${task.id}/images/${id}` : undefined)}
         large
       />
       <dl className="task-facts">
+        <div>
+          <dt>发件人</dt>
+          <dd>{senderDisplay(task.senderFrom || config.from)}</dd>
+        </div>
         <div>
           <dt>目标时间</dt>
           <dd>{formatTime(task.targetAt)}（北京时间）</dd>

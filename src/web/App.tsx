@@ -12,6 +12,7 @@ import {
   Inbox,
   LogOut,
   Menu,
+  Mail,
   Settings2,
   ShieldCheck,
   X,
@@ -196,6 +197,11 @@ function Workbench() {
       setBusy(false);
     }
   };
+  const saveSenderName = async (senderName: string) => {
+    await post('/profile', { senderName });
+    await refreshConfig();
+    setNotice('寄件昵称已保存，将用于之后新建的信');
+  };
   const cancelTask = async (task: MailTask) => {
     if (!confirm('取消这封尚未开始寄出的信？')) return;
     try {
@@ -253,10 +259,10 @@ function Workbench() {
       setNotice((e as Error).message);
     }
   };
-  const demo = async () => {
+  const demo = async (role: 'admin' | 'member' = 'admin') => {
     setBusy(true);
     try {
-      await post('/auth/demo');
+      await post('/auth/demo', { role });
       const data = await refreshConfig();
       if (!data?.user) throw new Error('连接暂未恢复，请再试一次');
       setAuthOpen(false);
@@ -502,6 +508,7 @@ function Workbench() {
           {page === 'settings' && (
             <Settings
               config={config}
+              onSaveName={saveSenderName}
               onPause={() => void togglePause()}
               onInvite={() => void createInvite()}
             />
@@ -576,13 +583,22 @@ function Workbench() {
                 </p>
               )}
               {config.demoAvailable && (
-                <button
-                  className="button secondary full demo-button"
-                  disabled={busy}
-                  onClick={() => void demo()}
-                >
-                  <Feather size={17} /> 预览邮局 · 不发送邮件
-                </button>
+                <>
+                  <button
+                    className="button secondary full demo-button"
+                    disabled={busy}
+                    onClick={() => void demo()}
+                  >
+                    <Feather size={17} /> 预览邮局 · 不发送邮件
+                  </button>
+                  <button
+                    className="button secondary full demo-button"
+                    disabled={busy}
+                    onClick={() => void demo('member')}
+                  >
+                    <Mail size={17} /> 普通寄信人预览 · 不发送邮件
+                  </button>
+                </>
               )}
             </>
           )}

@@ -70,9 +70,12 @@ def custom_content():
     if (len(subject) > MAX_CUSTOM_SUBJECT_CHARACTERS
             or any(not character.isprintable() for character in subject)):
         raise ConfigurationError("自定义邮件主题必须是单行文本，且不能超过 200 个字符")
-    subject = subject if subject.strip() else "来自邮件机器人的消息"
     if not body.strip():
-        raise ConfigurationError("自定义邮件正文不能为空")
+        from .dragon_letters import prepared_letter
+        default_subject, body = prepared_letter()
+        if not subject.strip():
+            subject = default_subject
+    subject = subject if subject.strip() else "来自邮件机器人的消息"
     if len(body) > MAX_CUSTOM_BODY_CHARACTERS or "\0" in body:
         raise ConfigurationError("自定义邮件正文不能包含空字符，且不能超过 100000 个字符")
     try:

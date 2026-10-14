@@ -102,16 +102,21 @@ def prepare(api,*,event=None,now=None):
         count=tasks.cancel(rid,repeating_only=action=='关闭计划')
         print(f'已关闭 {count} 个任务；历史保留，正在处理的邮件不能撤回。')
         return None
-    kinds={'发送测试邮件':'test','发送随机来信':'random','发送小龙娘来信':'dragon',
+    kinds={'发送邮件':'custom','循环发送':'custom','发送测试邮件':'test','发送随机来信':'random','发送小龙娘来信':'dragon',
            '发送自定义邮件':'custom','发送漫画邮件':'comic','安排一次':'dragon',
            '循环随机发送':'dragon','指定时间发送':'custom','周期发送':'custom'}
     if action not in kinds:raise TaskError('未知操作，未创建任务。')
-    if action=='周期发送' and not event.get('repeat_rule'):raise TaskError('周期发送必须填写重复规则，例如 every:2h。')
+    if action in {'周期发送','循环发送'} and not event.get('repeat_rule'):raise TaskError('周期发送必须填写重复规则，例如 every:2h。')
     if action=='指定时间发送' and not event.get('timing'):raise TaskError('指定时间发送必须填写目标时间。')
     kind=kinds[action]
-    if action=='发送自定义邮件' and custom_delivery_mode()=='B':
+    if action in {'发送邮件','循环发送'}:
+        style=event.get('mail_style') or '小澪预设信'
+        styles={'小澪预设信':'custom','随机来信':'random','小龙娘随机故事':'dragon'}
+        if style not in styles:raise TaskError('未知邮件风格，未创建任务。')
+        kind=styles[style]
+    if action in {'发送自定义邮件','发送邮件','循环发送'} and kind=='custom' and custom_delivery_mode()=='B':
         raise TaskError('B 延迟提醒尚未接入 Foxmail 自动提醒接口；未发送邮件，也未创建任务。请选择 A。')
-    timing=event.get('timing') or (custom_default_timing() if action=='发送自定义邮件' else 'now')
+    timing=event.get('timing') or (custom_default_timing() if kind=='custom' else 'now')
     repeat_text=event.get('repeat_rule') or ''
     # Preserve old API invocations without preserving a separate scheduler.
     if action in {'安排一次','循环随机发送'} and not event.get('timing'):

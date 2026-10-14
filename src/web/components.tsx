@@ -1,3 +1,4 @@
+import { bodyParts, type ImageInfo, type ImageInput } from '../shared/images';
 import { ArrowUpRight, Check, Clock3, Mail, Send, X } from 'lucide-react';
 import type { MailTask, SiteConfig } from '../shared/schema';
 import { statusLabels } from '../shared/schema';
@@ -85,12 +86,16 @@ export function Paper({
   recipient,
   from,
   large = false,
+  images = [],
+  imageUrl,
 }: {
   subject: string;
   body: string;
   recipient: string;
   from: string;
   large?: boolean;
+  images?: (ImageInfo | ImageInput)[];
+  imageUrl?: (id: string) => string | undefined;
 }) {
   return (
     <article className={'letter-paper ' + (large ? 'large' : '')}>
@@ -103,8 +108,25 @@ export function Paper({
       </div>
       <h3>{subject || '把想说的话，认真寄出去。'}</h3>
       <div className={'paper-body ' + (!body ? 'placeholder' : '')}>
-        {body ||
-          '有些话，写下来才刚刚好。\n\n写一封问候，分享一个小小的发现，\n或者把此刻的心情，寄给未来。\n\n不必很长，真诚就好。'}
+        {body
+          ? bodyParts(body).map((part, index) => {
+              if ('text' in part) return <span key={index}>{part.text}</span>;
+              const img = images.find((i) => i.id === part.imageId);
+              const url =
+                img &&
+                ('content' in img
+                  ? `data:${img.contentType};base64,${img.content}`
+                  : imageUrl?.(img.id));
+              return url ? (
+                <img key={index} className="paper-image" src={url} alt={img!.name} />
+              ) : (
+                <span key={index} className="cleared-image">
+                  照片：{img?.name || '图片'}
+                  <small>原图已清理</small>
+                </span>
+              );
+            })
+          : '有些话，写下来才刚刚好。\n\n写一封问候，分享一个小小的发现，\n或者把此刻的心情，寄给未来。\n\n不必很长，真诚就好。'}
       </div>
       <div className="paper-sign">
         <span className="handwritten">见字如面</span>
@@ -139,6 +161,8 @@ export function TaskDetail({
         body={task.body}
         recipient={task.recipient}
         from={config.from}
+        images={task.images}
+        imageUrl={(id) => (task.imagesAvailable ? `/api/tasks/${task.id}/images/${id}` : undefined)}
         large
       />
       <dl className="task-facts">
@@ -163,6 +187,13 @@ export function TaskDetail({
           </div>
         )}
       </dl>
+      {task.images?.length > 0 && !task.imagesAvailable && (
+        <p className="fine-print">
+          {task.status === 'accepted'
+            ? '网站已清理图片原图，邮件里仍包含图片。'
+            : '网站已清理图片原图，记录仅保留图片信息。'}
+        </p>
+      )}
       {task.status === 'accepted' && (
         <p className="fine-print">邮件服务已接受提交，最终是否进入收件箱仍以收件人邮箱为准。</p>
       )}

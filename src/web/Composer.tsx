@@ -1,3 +1,6 @@
+import { useState, type Dispatch, type SetStateAction } from 'react';
+import { templateText, type ImageInput } from '../shared/images';
+import LetterEditor from './LetterEditor';
 import {
   ArrowUpRight,
   BookmarkPlus,
@@ -14,6 +17,7 @@ export interface Draft {
   recipient: string;
   subject: string;
   body: string;
+  images: ImageInput[];
   timing: 'now' | 'schedule';
   sendAt: string;
 }
@@ -21,6 +25,7 @@ export const emptyDraft: Draft = {
   recipient: '',
   subject: '',
   body: '',
+  images: [],
   timing: 'now',
   sendAt: '',
 };
@@ -36,7 +41,7 @@ export default function Composer({
   onHistory,
 }: {
   draft: Draft;
-  onChange: (draft: Draft) => void;
+  onChange: Dispatch<SetStateAction<Draft>>;
   onSubmit: () => void;
   busy: boolean;
   config: SiteConfig;
@@ -45,7 +50,8 @@ export default function Composer({
   uncertain: boolean;
   onHistory: () => void;
 }) {
-  const set = (key: keyof Draft, value: string) => onChange({ ...draft, [key]: value });
+  const [processing, setProcessing] = useState(false);
+  const set = (key: keyof Draft, value: string) => onChange((old) => ({ ...old, [key]: value }));
   return (
     <>
       <div className="page-title">
@@ -71,7 +77,7 @@ export default function Composer({
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              onSubmit();
+              if (!processing) onSubmit();
             }}
           >
             <div className="field">
@@ -112,17 +118,15 @@ export default function Composer({
                   <BookmarkPlus size={14} /> 存为模板
                 </button>
               </div>
-              <textarea
-                id="body"
-                placeholder={'嗨，\n\n今天有件小事，想和你分享……'}
-                value={draft.body}
-                onChange={(e) => set('body', e.target.value)}
-                required
-                maxLength={20000}
+              <LetterEditor
+                draft={draft}
+                onChange={onChange}
+                disabled={busy || uncertain}
+                onProcessing={setProcessing}
               />
               <div className="editor-footer">
                 <span>文字会保留你的换行与段落</span>
-                <span>{draft.body.length.toLocaleString()} / 20,000</span>
+                <span>{templateText(draft.body).length.toLocaleString()} / 20,000</span>
               </div>
             </div>
             <div className="timing-label">什么时候寄出？</div>
@@ -179,7 +183,11 @@ export default function Composer({
                   核对发送记录 <ArrowUpRight size={16} />
                 </button>
               ) : (
-                <button type="submit" className="button primary" disabled={busy || config.paused}>
+                <button
+                  type="submit"
+                  className="button primary"
+                  disabled={busy || processing || config.paused}
+                >
                   {busy ? <span className="spinner" /> : <Send size={17} />}{' '}
                   {busy
                     ? '正在交给邮差…'
@@ -207,6 +215,7 @@ export default function Composer({
             body={draft.body}
             recipient={draft.recipient}
             from={config.from}
+            images={draft.images}
           />
           <div className="preview-foot">
             <Sparkles size={16} />

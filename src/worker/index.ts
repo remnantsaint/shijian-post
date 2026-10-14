@@ -1,3 +1,4 @@
+import { cleanupImages } from './images';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { secureHeaders } from 'hono/secure-headers';
@@ -11,9 +12,11 @@ import { createTask, dispatchTask, mailMode, paused, runDueTasks } from './mail'
 
 export const app = new Hono<AppEnv>();
 app.use('/api/*', secureHeaders({ referrerPolicy: 'no-referrer', xFrameOptions: 'DENY' }));
-app.use(
-  '/api/*',
-  bodyLimit({ maxSize: 96 * 1024, onError: (c) => c.json({ error: '内容太长，请缩短信件' }, 413) }),
+app.use('/api/*', async (c, next) =>
+  bodyLimit({
+    maxSize: c.req.method === 'POST' && c.req.path === '/api/tasks' ? 1_500_000 : 96 * 1024,
+    onError: (ctx) => ctx.json({ error: '内容太长，请减少文字或压缩图片' }, 413),
+  })(c, next),
 );
 app.use('/api/*', async (c, next) => {
   c.header('Cache-Control', 'no-store');
@@ -68,11 +71,29 @@ tasks.get('/:id', async (c) => {
     .first<TaskRow>();
   return task ? c.json({ task: taskView(task) }) : c.json({ error: '未找到这封信' }, 404);
 });
+tasks.get('/:id/images/:imageId', async (c) => {
+  const row = await c.env.DB.prepare(
+    'SELECT i.content,t.images_metadata FROM task_images i JOIN tasks t ON t.id=i.task_id WHERE t.id=? AND t.user_id=? AND i.image_id=?',
+  )
+    .bind(c.req.param('id'), c.get('user')!.id, c.req.param('imageId'))
+    .first<{ content: number[] | ArrayBuffer; images_metadata: string }>();
+  if (!row) return c.json({ error: '图片已清理或不存在' }, 404);
+  const info = (JSON.parse(row.images_metadata) as { id: string; contentType: string }[]).find(
+    (i) => i.id === c.req.param('imageId'),
+  );
+  if (!info) return c.json({ error: '图片不存在' }, 404);
+  c.header('Content-Type', info.contentType);
+  c.header('X-Content-Type-Options', 'nosniff');
+  return c.body(new Uint8Array(row.content).buffer);
+});
 tasks.post('/', async (c) => {
   const input = mailSchema.safeParse(await c.req.json());
   if (!input.success)
     return c.json(
-      { error: '请检查收件地址、标题、正文和发送时间', fields: input.error.flatten().fieldErrors },
+      {
+        error: '请检查收件地址、标题、正文、图片和发送时间',
+        fields: input.error.flatten().fieldErrors,
+      },
       400,
     );
   try {
@@ -98,6 +119,11 @@ tasks.post('/', async (c) => {
     const code = error instanceof Error ? error.message : '';
     if (code === 'ID_CONFLICT')
       return c.json({ error: '这个请求编号已使用，请先检查原任务记录' }, 409);
+    if (code === 'INVALID_IMAGES')
+      return c.json(
+        { error: '图片需要为有效的 PNG/JPEG，每封最多 3 张、合计不超过 1 MB，且应放在正文中' },
+        400,
+      );
     if (code === 'INVALID_TIME')
       return c.json({ error: '发送时间需在未来两年内，截止时间不能早于发送时间' }, 400);
     if (code === 'SUPPRESSED') return c.json({ error: '该收件人已拒收本网站的来信' }, 400);
@@ -110,7 +136,13 @@ tasks.post('/:id/cancel', async (c) => {
   )
     .bind(new Date().toISOString(), c.req.param('id'), c.get('user')!.id)
     .first<TaskRow>();
-  if (task) return c.json({ task: taskView(task) });
+  if (task) {
+    await cleanupImages(c.env, task.id);
+    const latest = await c.env.DB.prepare('SELECT * FROM tasks WHERE id=?')
+      .bind(task.id)
+      .first<TaskRow>();
+    return c.json({ task: taskView(latest!) });
+  }
   const existing = await c.env.DB.prepare('SELECT status FROM tasks WHERE id=? AND user_id=?')
     .bind(c.req.param('id'), c.get('user')!.id)
     .first<{ status: string }>();
@@ -194,6 +226,7 @@ app.post('/api/unsubscribe/:token', async (c) => {
       "UPDATE tasks SET status='cancelled',finished_at=?,reason='收件人拒收' WHERE recipient=? AND status='queued'",
     ).bind(new Date().toISOString(), task.recipient),
   ]);
+  await cleanupImages(c.env);
   return c.json({ ok: true });
 });
 app.notFound((c) => c.json({ error: '未找到此接口' }, 404));

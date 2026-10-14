@@ -1,3 +1,4 @@
+import { prepareImages, loadImages, cleanupImages } from './images';
 import type { MailInput } from '../shared/schema';
 import { digest, token } from './security';
 import { renderLetter } from './mail-template';
@@ -21,6 +22,8 @@ export async function paused(env: Env) {
   );
 }
 export async function createTask(env: Env, userId: string, input: MailInput, now = new Date()) {
+  const images = await prepareImages(input.body, input.images);
+  const metadata = images.map((img) => img.info);
   const hash = await digest(
     JSON.stringify({
       recipient: input.recipient,
@@ -28,6 +31,7 @@ export async function createTask(env: Env, userId: string, input: MailInput, now
       body: input.body,
       sendAt: input.sendAt || null,
       expiresAt: input.expiresAt || null,
+      ...(metadata.length ? { images: metadata } : {}),
     }),
   );
   const old = await env.DB.prepare('SELECT * FROM tasks WHERE id=?')
@@ -50,22 +54,30 @@ export async function createTask(env: Env, userId: string, input: MailInput, now
       .first()
   )
     throw new Error('SUPPRESSED');
-  const result = await env.DB.prepare(
-    "INSERT OR IGNORE INTO tasks(id,user_id,recipient,subject,body,payload_hash,status,target_at,expires_at,created_at,unsubscribe_token) VALUES(?,?,?,?,?,?,'queued',?,?,?,?)",
-  )
-    .bind(
-      input.id,
-      userId,
-      input.recipient,
-      input.subject,
-      input.body,
-      hash,
-      target.toISOString(),
-      input.expiresAt ? new Date(input.expiresAt).toISOString() : null,
-      now.toISOString(),
-      token(),
-    )
-    .run();
+  const insert = env.DB.prepare(
+    "INSERT OR IGNORE INTO tasks(id,user_id,recipient,subject,body,payload_hash,status,target_at,expires_at,created_at,unsubscribe_token,images_metadata) VALUES(?,?,?,?,?,?,'queued',?,?,?,?,?)",
+  ).bind(
+    input.id,
+    userId,
+    input.recipient,
+    input.subject,
+    input.body,
+    hash,
+    target.toISOString(),
+    input.expiresAt ? new Date(input.expiresAt).toISOString() : null,
+    now.toISOString(),
+    token(),
+    JSON.stringify(metadata),
+  );
+  // The task and all originals are saved together, including on concurrent replays.
+  const [result] = await env.DB.batch([
+    insert,
+    ...images.map((img) =>
+      env.DB.prepare(
+        "INSERT OR IGNORE INTO task_images(task_id,image_id,content) SELECT id,?,? FROM tasks WHERE id=? AND user_id=? AND payload_hash=? AND status='queued' AND images_cleaned_at IS NULL",
+      ).bind(img.info.id, img.bytes.buffer, input.id, userId, hash),
+    ),
+  ]);
   const task = await env.DB.prepare('SELECT * FROM tasks WHERE id=?')
     .bind(input.id)
     .first<TaskRow>();
@@ -91,7 +103,10 @@ export async function dispatchTask(
   )
     .bind(now, id, now)
     .first<TaskRow>();
-  if (!task) return;
+  if (!task) {
+    await cleanupImages(env, id);
+    return;
+  }
   let status: 'accepted' | 'simulated' | 'failed' | 'uncertain' = 'failed';
   let reason: string | null = null;
   let providerId: string | null = null;
@@ -111,11 +126,32 @@ export async function dispatchTask(
     return;
   } else if (mailMode(env) === 'disabled') reason = '邮件服务尚未配置或已关闭';
   else if (mailMode(env) === 'mock') {
+    try {
+      await loadImages(env, task);
+    } catch {
+      await env.DB.prepare(
+        "UPDATE tasks SET status='failed',finished_at=?,reason='图片原图缺失或损坏，未提交邮件' WHERE id=? AND status='sending'",
+      )
+        .bind(now, id)
+        .run();
+      return;
+    }
     status = 'simulated';
     reason = '本地模拟，未向真实邮箱投递';
   } else {
     const unsubscribe = new URL('/unsubscribe/' + task.unsubscribe_token, env.APP_URL).href;
-    const letter = renderLetter(task.subject, task.body, unsubscribe);
+    let images: Awaited<ReturnType<typeof loadImages>>;
+    try {
+      images = await loadImages(env, task);
+    } catch {
+      await env.DB.prepare(
+        "UPDATE tasks SET status='failed',finished_at=?,reason='图片原图缺失或损坏，未提交邮件' WHERE id=? AND status='sending'",
+      )
+        .bind(now, id)
+        .run();
+      return;
+    }
+    const letter = renderLetter(task.subject, task.body, unsubscribe, images);
     try {
       const response = await (options.fetcher || fetch)('https://api.resend.com/emails', {
         method: 'POST',
@@ -131,6 +167,16 @@ export async function dispatchTask(
           subject: task.subject,
           text: letter.text,
           html: letter.html,
+          ...(images.length
+            ? {
+                attachments: images.map((img) => ({
+                  filename: img.name,
+                  content: img.content,
+                  content_type: img.contentType,
+                  content_id: 'photo-' + img.id,
+                })),
+              }
+            : {}),
         }),
       });
       if (response.ok) {
@@ -157,6 +203,7 @@ export async function dispatchTask(
   )
     .bind(status, new Date().toISOString(), providerId, reason, id)
     .run();
+  await cleanupImages(env, id);
 }
 export async function runDueTasks(env: Env, options: { now?: Date; fetcher?: typeof fetch } = {}) {
   const now = options.now || new Date();
@@ -169,6 +216,7 @@ export async function runDueTasks(env: Env, options: { now?: Date; fetcher?: typ
     env.DB.prepare('DELETE FROM sessions WHERE expires_at<?').bind(now.toISOString()),
     env.DB.prepare('DELETE FROM oauth_states WHERE expires_at<?').bind(now.toISOString()),
   ]);
+  await cleanupImages(env);
   if (await paused(env)) return;
   const due = await env.DB.prepare(
     "SELECT id FROM tasks WHERE status='queued' AND target_at<=? ORDER BY target_at LIMIT 10",

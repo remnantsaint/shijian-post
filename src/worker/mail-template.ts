@@ -1,12 +1,34 @@
+import { bodyParts, type ImageInfo } from '../shared/images';
 import { escapeHtml } from './security';
 
-export function renderLetter(subject: string, body: string, unsubscribe: string) {
+export function renderLetter(
+  subject: string,
+  body: string,
+  unsubscribe: string,
+  images: ImageInfo[] = [],
+) {
   const safeSubject = escapeHtml(subject);
-  const safeBody = escapeHtml(body).replace(/\r\n|\r|\n/g, '<br />');
+  const parts = bodyParts(body);
+  const safeBody = parts
+    .map((part) => {
+      if ('text' in part) return escapeHtml(part.text).replace(/\r\n|\r|\n/g, '<br />');
+      const img = images.find((i) => i.id === part.imageId);
+      return img
+        ? `<img src="cid:photo-${img.id}" alt="${escapeHtml(img.name)}" width="${Math.min(img.width, 544)}" style="display:block;max-width:100%;height:auto;margin:16px 0;border:0;" />`
+        : '';
+    })
+    .join('');
+  const textBody = parts
+    .map((part) =>
+      'text' in part
+        ? part.text
+        : `[照片：${images.find((i) => i.id === part.imageId)?.name || '图片'}]`,
+    )
+    .join('');
   const safeUnsubscribe = escapeHtml(unsubscribe);
   return {
     text:
-      body +
+      textBody +
       '\n\n——\n柿间邮局 · 把今天的话，寄给某一天。\n这封信通过柿间邮局寄出。拒收后续来信：' +
       unsubscribe,
     html: `<!doctype html>

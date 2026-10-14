@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_IMAGES, MAX_IMAGE_BYTES, type ImageInfo } from './images';
 export const mailSchema = z
   .object({
     id: z.uuid(),
@@ -17,6 +18,28 @@ export const mailSchema = z
       .min(1)
       .max(20000)
       .refine((v) => v.trim().length > 0 && !v.includes('\0'), '正文不能为空或包含空字符'),
+    images: z
+      .array(
+        z
+          .object({
+            id: z.uuid(),
+            name: z
+              .string()
+              .min(1)
+              .max(100)
+              .refine((v) => !/[\x00-\x1f\x7f/\\]/.test(v)),
+            contentType: z.enum(['image/jpeg', 'image/png']),
+            content: z
+              .string()
+              .min(4)
+              .max(Math.ceil(MAX_IMAGE_BYTES / 3) * 4)
+              .regex(/^[A-Za-z0-9+/]*={0,2}$/)
+              .refine((v) => v.length % 4 === 0),
+          })
+          .strict(),
+      )
+      .max(MAX_IMAGES)
+      .optional(),
     sendAt: z.iso.datetime({ offset: true }).optional(),
     expiresAt: z.iso.datetime({ offset: true }).optional(),
   })
@@ -46,6 +69,8 @@ export interface User {
   active: boolean;
 }
 export interface MailTask {
+  images: ImageInfo[];
+  imagesAvailable: boolean;
   id: string;
   recipient: string;
   subject: string;

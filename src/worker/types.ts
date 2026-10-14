@@ -1,3 +1,4 @@
+import type { ImageInfo } from '../shared/images';
 import type { Status, User } from '../shared/schema';
 export interface Env {
   DB: D1Database;
@@ -28,6 +29,8 @@ export interface TaskRow {
   provider_id: string | null;
   reason: string | null;
   unsubscribe_token: string;
+  images_metadata: string;
+  images_cleaned_at: string | null;
 }
 export interface UserRow {
   id: string;
@@ -48,6 +51,19 @@ export const userView = (row: UserRow): User => ({
   active: Boolean(row.active),
 });
 export const taskView = (row: TaskRow) => ({
+  images: (JSON.parse(row.images_metadata || '[]') as ImageInfo[]).map(
+    ({ id, name, contentType, size, width, height }) => ({
+      id,
+      name,
+      contentType,
+      size,
+      width,
+      height,
+    }),
+  ),
+  imagesAvailable: Boolean(
+    row.images_metadata && row.images_metadata !== '[]' && !row.images_cleaned_at,
+  ),
   id: row.id,
   recipient: row.recipient,
   subject: row.subject,

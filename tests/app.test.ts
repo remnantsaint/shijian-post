@@ -1,7 +1,9 @@
+import { prepareImages } from '../src/worker/images';
+import { imageMarker, type ImageInput } from '../src/shared/images';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { build } from 'esbuild';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { createTask, dispatchTask, runDueTasks } from '../src/worker/mail';
 import { digest } from '../src/worker/security';
 import { mailSchema } from '../src/shared/schema';
@@ -92,6 +94,7 @@ beforeAll(async () => {
     format: 'esm',
     platform: 'browser',
     target: 'es2022',
+    external: ['node:buffer'],
   });
   mf = new Miniflare(
     convertV4MiniflareOptions({
@@ -120,7 +123,14 @@ beforeAll(async () => {
     }),
   );
   db = (await mf.getD1Database('DB')) as unknown as D1Database;
-  const sql = await readFile('migrations/0001_initial.sql', 'utf8');
+  const sql = (
+    await Promise.all(
+      (await readdir('migrations'))
+        .filter((n) => n.endsWith('.sql'))
+        .sort()
+        .map((n) => readFile('migrations/' + n, 'utf8')),
+    )
+  ).join(';');
   for (const statement of sql
     .split(';')
     .map((s) => s.trim())
@@ -129,6 +139,7 @@ beforeAll(async () => {
 }, 60000);
 beforeEach(async () => {
   for (const table of [
+    'task_images',
     'tasks',
     'templates',
     'invitations',
@@ -473,5 +484,285 @@ describe('模板与收件人拒收', () => {
     });
     expect(calls).toBe(0);
     expect((await row(task.id)).status).toBe('failed');
+  });
+});
+
+const png =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==';
+const photo = (): ImageInput => ({
+  id: crypto.randomUUID(),
+  name: '照片.png',
+  contentType: 'image/png',
+  content: png,
+});
+const withImage = (img = photo(), extra: Record<string, unknown> = {}) =>
+  payload({ body: '前面的文字\n' + imageMarker(img.id) + '\n后面的文字', images: [img], ...extra });
+const imageCount = async (id: string) =>
+  (await db
+    .prepare('SELECT COUNT(*) AS count FROM task_images WHERE task_id=?')
+    .bind(id)
+    .first<{ count: number }>())!.count;
+
+describe('正文图片和存储生命周期', () => {
+  it('stores originals privately and never returns base64 or hashes in task JSON', async () => {
+    const img = photo();
+    const input = withImage(img);
+    const response = await request('/tasks', 'POST', input);
+    expect(response.status).toBe(201);
+    const json = (await response.json()) as {
+      task: { images: unknown[]; imagesAvailable: boolean };
+    };
+    expect(json.task.images).toHaveLength(1);
+    expect(json.task.imagesAvailable).toBe(true);
+    expect(JSON.stringify(json)).not.toContain(png);
+    expect(JSON.stringify(json)).not.toContain('sha256');
+    const path = `/tasks/${input.id}/images/${img.id}`;
+    const image = await request(path);
+    expect(image.status).toBe(200);
+    expect(image.headers.get('Cache-Control')).toBe('no-store');
+    expect(image.headers.get('Content-Type')).toBe('image/png');
+    expect(Buffer.from(await image.arrayBuffer()).toString('base64')).toBe(png);
+    expect((await request(path, 'GET', undefined, '')).status).toBe(401);
+    expect((await request(path, 'GET', undefined, await otherUser())).status).toBe(404);
+  });
+  it('rejects invalid format, duplicate or missing references and too many images', async () => {
+    const img = photo();
+    for (const input of [
+      withImage({ ...img, contentType: 'image/jpeg' }),
+      withImage({ ...img, content: btoa('not a raster') }),
+      withImage({ ...img, content: 'broken' }),
+      withImage(img, { body: '没有图片位置' }),
+      withImage(img, { body: imageMarker(img.id).repeat(2) }),
+      payload({ body: imageMarker(img.id) }),
+      withImage(img, { images: [img, img, img, img] }),
+      withImage({ ...img, name: '../x.png' }),
+    ])
+      expect((await request('/tasks', 'POST', input)).status).toBe(400);
+    expect(await db.prepare('SELECT id FROM tasks').first()).toBeNull();
+  });
+  it('rejects oversized combined bytes and malicious dimensions', async () => {
+    const img = photo();
+    const bytes = Buffer.from(png, 'base64');
+    const padding = Buffer.alloc(600012);
+    padding.writeUInt32BE(600000, 0);
+    padding.write('tEXt', 4);
+    const oversized = Buffer.concat([
+      bytes.subarray(0, -12),
+      padding,
+      bytes.subarray(-12),
+    ]).toString('base64');
+    const other = photo();
+    expect(
+      (await prepareImages(imageMarker(img.id), [{ ...img, content: oversized }]))[0].bytes.length,
+    ).toBeGreaterThan(600000);
+    await expect(
+      createTask(
+        engineEnv(),
+        'local-demo',
+        mailSchema.parse(
+          withImage(img, {
+            body: imageMarker(img.id) + imageMarker(other.id),
+            images: [
+              { ...img, content: oversized },
+              { ...other, content: oversized },
+            ],
+          }),
+        ),
+      ),
+    ).rejects.toThrow('INVALID_IMAGES');
+    bytes.writeUInt32BE(5000, 16);
+    expect(
+      (await request('/tasks', 'POST', withImage({ ...img, content: bytes.toString('base64') })))
+        .status,
+    ).toBe(400);
+  });
+  it('rolls back the task if an original cannot be stored', async () => {
+    await db
+      .prepare(
+        "CREATE TRIGGER reject_original BEFORE INSERT ON task_images BEGIN SELECT RAISE(ABORT, 'test storage failure'); END",
+      )
+      .run();
+    const input = withImage();
+    try {
+      expect((await request('/tasks', 'POST', input)).status).toBe(500);
+    } finally {
+      await db.prepare('DROP TRIGGER reject_original').run();
+    }
+    expect(await db.prepare('SELECT id FROM tasks WHERE id=?').bind(input.id).first()).toBeNull();
+    expect(await imageCount(input.id)).toBe(0);
+  });
+  it('submits CID bytes in body order and cleans only after durable acceptance', async () => {
+    const img = photo();
+    const input = withImage(img, { subject: '<script>alert(1)</script>' });
+    await request('/tasks', 'POST', input);
+    await due(input.id);
+    let calls = 0;
+    const fetcher: typeof fetch = async (_url, init) => {
+      calls++;
+      expect(await imageCount(input.id)).toBe(1);
+      expect((await row(input.id)).status).toBe('sending');
+      const mail = JSON.parse(String(init?.body));
+      expect(mail.attachments).toEqual([
+        {
+          filename: img.name,
+          content: png,
+          content_type: 'image/png',
+          content_id: 'photo-' + img.id,
+        },
+      ]);
+      expect(mail.html).toContain('src="cid:photo-' + img.id + '"');
+      expect(mail.html.indexOf('前面的文字')).toBeLessThan(mail.html.indexOf('src="cid:'));
+      expect(mail.html.indexOf('后面的文字')).toBeGreaterThan(mail.html.indexOf('src="cid:'));
+      expect(mail.html).not.toContain('<script>');
+      expect(mail.text).toContain('[照片：照片.png]');
+      expect(mail.text).not.toContain('[[image:');
+      return Response.json({ id: 'image-provider-id' });
+    };
+    await Promise.all([
+      dispatchTask(engineEnv(), input.id, { fetcher }),
+      dispatchTask(engineEnv(), input.id, { fetcher }),
+    ]);
+    expect(calls).toBe(1);
+    expect((await row(input.id)).status).toBe('accepted');
+    expect(await imageCount(input.id)).toBe(0);
+    expect(JSON.parse((await row(input.id)).images_metadata)).toHaveLength(1);
+    expect((await request('/tasks', 'POST', input)).status).toBe(200);
+    expect(await imageCount(input.id)).toBe(0);
+    expect(
+      (await request('/tasks', 'POST', { ...input, images: [{ ...img, name: '改名.png' }] }))
+        .status,
+    ).toBe(409);
+  });
+  it('cleans simulated images and cancellation without rehydrating an old task', async () => {
+    const immediate = withImage(photo(), { sendAt: undefined });
+    const response = await request('/tasks', 'POST', immediate);
+    expect(response.status).toBe(201);
+    expect(await imageCount(immediate.id)).toBe(0);
+    const scheduled = withImage();
+    await request('/tasks', 'POST', scheduled);
+    const cancel = await request('/tasks/' + scheduled.id + '/cancel', 'POST', {});
+    expect(cancel.status).toBe(200);
+    expect(await imageCount(scheduled.id)).toBe(0);
+    expect(
+      ((await cancel.json()) as { task: { imagesAvailable: boolean } }).task.imagesAvailable,
+    ).toBe(false);
+    await request('/tasks', 'POST', scheduled);
+    expect(await imageCount(scheduled.id)).toBe(0);
+  });
+  it('keeps bytes for uncertainty and definite failure and never auto retries', async () => {
+    for (const status of [500, 422]) {
+      const input = withImage();
+      await request('/tasks', 'POST', input);
+      await due(input.id);
+      let calls = 0;
+      const fetcher: typeof fetch = async () => {
+        calls++;
+        return new Response('', { status });
+      };
+      await dispatchTask(engineEnv(), input.id, { fetcher });
+      await runDueTasks(engineEnv(), { fetcher });
+      expect(calls).toBe(1);
+      expect(await imageCount(input.id)).toBe(1);
+      expect((await row(input.id)).images_cleaned_at).toBeNull();
+    }
+  });
+  it('keeps originals when the provider accepted but the result write failed', async () => {
+    const input = withImage();
+    await request('/tasks', 'POST', input);
+    await due(input.id);
+    const brokenDB = {
+      prepare: (sql: string) =>
+        sql.startsWith('UPDATE tasks SET status=?,finished_at=')
+          ? {
+              bind: () => ({
+                run: async () => {
+                  throw new Error('test write failure');
+                },
+              }),
+            }
+          : db.prepare(sql),
+    } as unknown as D1Database;
+    await expect(
+      dispatchTask(engineEnv({ DB: brokenDB }), input.id, {
+        fetcher: async () => Response.json({ id: 'accepted' }),
+      }),
+    ).rejects.toThrow();
+    await runDueTasks(engineEnv(), {
+      now: new Date(Date.now() + 16 * 60000),
+      fetcher: async () => {
+        throw new Error('must not submit again');
+      },
+    });
+    expect((await row(input.id)).status).toBe('uncertain');
+    expect(await imageCount(input.id)).toBe(1);
+  });
+  it('retries cleanup during polling, including while paused, without resubmitting', async () => {
+    const input = withImage();
+    await request('/tasks', 'POST', input);
+    await due(input.id);
+    const brokenDB = {
+      prepare: (sql: string) => db.prepare(sql),
+      batch: async () => {
+        throw new Error('cleanup write failure');
+      },
+    } as unknown as D1Database;
+    await expect(
+      dispatchTask(engineEnv({ DB: brokenDB }), input.id, {
+        fetcher: async () => Response.json({ id: 'accepted' }),
+      }),
+    ).rejects.toThrow();
+    expect((await row(input.id)).status).toBe('accepted');
+    expect(await imageCount(input.id)).toBe(1);
+    await request('/admin/settings', 'POST', { paused: true });
+    await runDueTasks(engineEnv(), {
+      fetcher: async () => {
+        throw new Error('must not submit');
+      },
+    });
+    expect(await imageCount(input.id)).toBe(0);
+    expect((await row(input.id)).images_cleaned_at).not.toBeNull();
+  });
+  it('cleans expired and recipient-cancelled originals', async () => {
+    const input = withImage();
+    await request('/tasks', 'POST', input);
+    await db
+      .prepare('UPDATE tasks SET expires_at=?,target_at=? WHERE id=?')
+      .bind(
+        new Date(Date.now() - 1000).toISOString(),
+        new Date(Date.now() - 2000).toISOString(),
+        input.id,
+      )
+      .run();
+    await dispatchTask(engineEnv(), input.id, {
+      fetcher: async () => {
+        throw new Error('must not submit');
+      },
+    });
+    expect((await row(input.id)).status).toBe('expired');
+    expect(await imageCount(input.id)).toBe(0);
+    const blocked = withImage();
+    await request('/tasks', 'POST', blocked);
+    await request('/unsubscribe/' + (await row(blocked.id)).unsubscribe_token, 'POST', {}, '');
+    expect((await row(blocked.id)).status).toBe('cancelled');
+    expect(await imageCount(blocked.id)).toBe(0);
+  });
+  it('does not send when an original is missing or corrupted', async () => {
+    const input = withImage();
+    await request('/tasks', 'POST', input);
+    await due(input.id);
+    await db
+      .prepare('UPDATE task_images SET content=? WHERE task_id=?')
+      .bind(new Uint8Array([1, 2, 3]).buffer, input.id)
+      .run();
+    let calls = 0;
+    await dispatchTask(engineEnv(), input.id, {
+      fetcher: async () => {
+        calls++;
+        return Response.json({ id: 'never' });
+      },
+    });
+    expect(calls).toBe(0);
+    expect((await row(input.id)).status).toBe('failed');
+    expect(await imageCount(input.id)).toBe(1);
   });
 });

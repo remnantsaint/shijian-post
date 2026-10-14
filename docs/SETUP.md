@@ -96,17 +96,17 @@ npm run db:migrate:remote
 
 本次站点使用的记录如下；新注册账号的类型和目标可能不同，应以当前后台为准：
 
-| 类型  | 名称                   | 内容或目标                   | 状态                   |
-| ----- | ---------------------- | ---------------------------- | ---------------------- |
-| TXT   | resend._domainkey.send | 从 Resend 复制完整 DKIM 公钥 | TTL Auto               |
-| CNAME | rsend.send             | 从 Resend 复制对应目标       | 仅 DNS，灰云；TTL Auto |
-| CNAME | send.send              | 从 Resend 复制对应目标       | 仅 DNS，灰云；TTL Auto |
+| 类型  | 名称                    | 内容或目标                   | 状态                   |
+| ----- | ----------------------- | ---------------------------- | ---------------------- |
+| TXT   | resend.\_domainkey.send | 从 Resend 复制完整 DKIM 公钥 | TTL Auto               |
+| CNAME | rsend.send              | 从 Resend 复制对应目标       | 仅 DNS，灰云；TTL Auto |
+| CNAME | send.send               | 从 Resend 复制对应目标       | 仅 DNS，灰云；TTL Auto |
 
 Cloudflare 会补上 remsait.com，因此 send.send 的完整地址为 send.send.remsait.com。这是邮件服务记录，不是网站访问入口。TXT/MX 没有网站代理功能；任何邮件 CNAME 都应使用灰云。
 
 Enable Sending 开启，Enable Receiving 关闭。当前只提供发信，不提供收件箱；发件地址不需要单独注册成邮箱。
 
-检查是否已有 _dmarc 或 _dmarc.send。没有记录时，可为发信子域名添加 TXT，名称 _dmarc.send，内容 v=DMARC1; p=none;。本次站点也可继承根域已有的 _dmarc 策略，不要重复添加或盲目覆盖。
+检查是否已有 \_dmarc 或 \_dmarc.send。没有记录时，可为发信子域名添加 TXT，名称 \_dmarc.send，内容 v=DMARC1; p=none;。本次站点也可继承根域已有的 \_dmarc 策略，不要重复添加或盲目覆盖。
 
 p=none 是初期不要求拦截的策略，不能保证进入收件箱。确认正常邮件的 DKIM/SPF 对齐和 DMARC 通过后，再评估 quarantine 或 reject。没有真实收件地址时，不填 rua 报告地址。
 
@@ -150,7 +150,7 @@ Resend 域名验证通过后，将 MAIL_MODE 改为 resend，再执行 npm run d
 
 在收到的邮件中找“更多操作 → 查看原文/邮件头”，搜索 Authentication-Results。没有该字段时再找 Received-SPF、spf=、dkim= 或 dmarc=。
 
-- dkim=fail(No key)：收件服务器当时无法取得签名所用公钥。根据签名的 s 和 d 查询 TXT，例如 s=resend、d=send.remsait.com 对应 resend._domainkey.send.remsait.com。
+- dkim=fail(No key)：收件服务器当时无法取得签名所用公钥。根据签名的 s 和 d 查询 TXT，例如 s=resend、d=send.remsait.com 对应 resend.\_domainkey.send.remsait.com。
 - DNS 修改后，旧邮件的认证结果不会更新，需要少量新邮件验证。
 - 没有显示 spf= 不等于 SPF 失败；本次 rsend.send 通过 CNAME 指向服务商管理的 SPF，不能在同名 CNAME 上额外加 TXT。
 - 域名 DKIM 通过且与发件地址域名对齐时，可满足 DMARC 的 DKIM 路径；具体仍看收件方报告。
@@ -194,6 +194,34 @@ Cloudflare Worker 名称应与 wrangler.jsonc 的 name=shijian-post 一致；D1 
 数据库结构变更仍需迁移：先检查新 SQL，执行 npm run build 和 npm run db:migrate:remote，再发布依赖新表结构的代码。当前自动部署命令不自动修改数据库结构。
 
 [官方：连接现有 Worker](https://developers.cloudflare.com/workers/ci-cd/builds/) · [构建配置](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/)
+
+## 图片功能升级
+
+正文图片新增一项数据库迁移：migrations/0002_inline_images.sql，给 tasks 添加图片信息与清理时间，新增 task_images 存放私有图片 BLOB。已有用户、信件、OAuth 和发信配置保持兼容，不需要新注册服务、添加 DNS 或设置密钥。
+
+在 F:\shijian-post 中先验证本地，再执行线上迁移。GitHub 已连接自动部署时，务必在推送 main **之前**完成迁移：
+
+```powershell
+npm run db:migrate
+npm run typecheck
+npm test
+npm run test:e2e
+npm run build
+# 只在本机尚未登录原 Cloudflare 账号时执行：npx wrangler login
+npm run db:migrate:remote
+# 确认迁移成功后再提交、推送；Cloudflare 会自动构建部署。
+git add .
+git commit -m "Support inline email images"
+git push
+```
+
+migration apply 会记录已执行的 SQL，重复运行不会重复加表或删除原数据。当前 Cloudflare Builds 部署命令不自动迁移 D1。
+
+上线后，先在写信区点一下想放图的位置，再粘贴图片或点击“选择图片”。图与文字一起预览；定时寄信时，自己的记录详情可查看尚未清理的图片。Resend 接受且结果存入 D1 后清理原图；已取消、已过期也清理。结果待核实或失败时原图保留供核实，仍不会自动重试发信。
+
+邮件使用 CID 内嵌图片，每封最多 3 张、压缩后合计 1 MB；不需要 R2。模板仅保存文字。网站清理后只能在详情中看见图片信息占位，收件人邮件中仍有已提交的图片。
+
+[Resend 官方：CID 内嵌图片](https://resend.com/changelog/embed-images-using-cid)
 
 ## 换电脑与日常开发
 

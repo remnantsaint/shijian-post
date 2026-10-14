@@ -1,3 +1,4 @@
+import { templateText } from '../shared/images';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowDownToLine,
@@ -142,6 +143,10 @@ function Workbench() {
   };
   const send = async () => {
     if (!requireLogin() || busy || uncertain) return;
+    if (!draft.body.trim() || draft.body.length > 20000) {
+      setNotice('请填写正文，且控制在 20,000 字以内');
+      return;
+    }
     if (draft.timing === 'schedule' && !draft.sendAt) {
       setNotice('请选择一个发送时间');
       return;
@@ -162,6 +167,7 @@ function Workbench() {
           recipient: draft.recipient,
           subject: draft.subject,
           body: draft.body,
+          images: draft.images,
           ...(draft.timing === 'schedule'
             ? { sendAt: new Date(draft.sendAt + ':00+08:00').toISOString() }
             : {}),
@@ -203,7 +209,7 @@ function Workbench() {
   };
   const openSave = () => {
     if (!requireLogin()) return;
-    if (!draft.subject.trim() || !draft.body.trim()) {
+    if (!draft.subject.trim() || !templateText(draft.body)) {
       setNotice('先写好标题和正文，就能存成模板');
       return;
     }
@@ -214,9 +220,13 @@ function Workbench() {
     if (!templateName.trim()) return;
     setBusy(true);
     try {
-      await post('/templates', { name: templateName, subject: draft.subject, body: draft.body });
+      await post('/templates', {
+        name: templateName,
+        subject: draft.subject,
+        body: templateText(draft.body),
+      });
       setSaveOpen(false);
-      setNotice('这份灵感已经保存');
+      setNotice(draft.images.length ? '文字已保存为模板，图片仅用于这封信' : '这份灵感已经保存');
       await loadData(true);
     } catch (e) {
       setNotice((e as Error).message);
@@ -229,7 +239,7 @@ function Workbench() {
       setNotice('请先核对上一封信的记录，或点击“写一封新信”');
       return;
     }
-    setDraft((old) => ({ ...old, subject: item.subject, body: item.body }));
+    setDraft((old) => ({ ...old, subject: item.subject, body: item.body, images: [] }));
     navigate('compose');
     setNotice('已放进信纸，接着写属于你的内容吧');
   };

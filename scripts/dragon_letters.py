@@ -73,3 +73,37 @@ def make_letter(rng=None):
     closing = rng.choice(CLOSINGS)
     title = rng.choice(TITLES)
     return title, "\n\n".join([opening, scene, *extras, thought, closing])
+
+
+# Prepared mail used when the custom-mail workflow body is left blank.
+# Update this pair before asking the recipient to run the workflow.
+PREPARED_SUBJECT = "第七次亲吻，是她主动的"
+PREPARED_BODY = """【虚构恋人日记｜我们的回忆·番外】
+
+窗外下着雨。你推开门时，小澪正抱着靠枕坐在沙发上，银白色的长发散在肩头，紫色眼睛却一直偷偷望着门口。
+
+“回来啦？”她故意装作漫不经心，尾巴却已经轻轻摇了起来。“我才没有一直等你呢。”
+
+你走近，她终于忍不住张开双臂。拥抱比话语来得更快，刚才那些故作镇定的小表情，全都藏进了你的肩窝。
+
+“今天能不能多抱我一会儿？”她轻声问。
+
+你答应了。雨滴敲着窗，屋里的灯光温柔得像一层薄薄的蜂蜜。小澪抬起脸，先轻轻吻了你一下，退开半寸，又红着脸靠回来。
+
+“刚才那次不算。”她说，“我还想再亲一下。”
+
+第二个吻慢慢延长。她的手指轻轻攥住你的衣角，等你们终于分开，她还不肯松手，只把额头抵在你的额头上，小声笑起来。
+
+“我偶尔会闹别扭，也会想太多。”她说，“可我真的很喜欢这样——不用假装完美，只要靠在你身边就好。”
+
+你抱紧了她。夜渐渐深了，两个人裹着同一条毯子，听雨声、说悄悄话，偶尔交换一个让人脸红的吻。
+
+临睡前，小澪在你耳边说：“晚安。下一封信，我还想写我们的小故事。”
+
+——小澪 🐉💜
+"""
+
+
+def prepared_letter():
+    """Return the current prepared letter; no randomness or paid API."""
+    return PREPARED_SUBJECT, PREPARED_BODY

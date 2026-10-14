@@ -264,10 +264,10 @@ function Workbench() {
       setNotice((error as Error).message);
     }
   };
-  const saveSenderName = async (senderName: string) => {
-    await post('/profile', { senderName });
+  const saveSenderProfile = async (senderName: string, replyEmail: string) => {
+    await post('/profile', { senderName, replyEmail });
     await refreshConfig();
-    setNotice('寄件昵称已保存，将用于之后新建的信');
+    setNotice('寄件设置已保存，将用于之后新建的信');
   };
   const cancelTask = async (task: MailTask) => {
     if (!confirm('取消这封尚未开始寄出的信？')) return;
@@ -573,7 +573,7 @@ function Workbench() {
           {page === 'settings' && (
             <Settings
               config={config}
-              onSaveName={saveSenderName}
+              onSaveProfile={saveSenderProfile}
               onPause={() => void togglePause()}
             />
           )}

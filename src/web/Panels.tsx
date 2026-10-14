@@ -295,20 +295,22 @@ export function Templates({
 }
 export function Settings({
   config,
-  onSaveName,
+  onSaveProfile,
   onPause,
 }: {
   config: SiteConfig;
-  onSaveName: (name: string) => Promise<void>;
+  onSaveProfile: (name: string, replyEmail: string) => Promise<void>;
   onPause: () => void;
 }) {
   const [nickname, setNickname] = useState(config.user?.senderName || '');
+  const [replyEmail, setReplyEmail] = useState(config.user?.replyEmail || '');
   const [saving, setSaving] = useState(false);
   const [nameError, setNameError] = useState('');
   useEffect(() => {
     setNickname(config.user?.senderName || '');
+    setReplyEmail(config.user?.replyEmail || '');
     setNameError('');
-  }, [config.user?.id, config.user?.senderName]);
+  }, [config.user?.id, config.user?.senderName, config.user?.replyEmail]);
   const previewUser = Boolean(
     config.user && ['local-demo', 'local-member'].includes(config.user.id),
   );
@@ -370,7 +372,7 @@ export function Settings({
               setSaving(true);
               setNameError('');
               try {
-                await onSaveName(nickname);
+                await onSaveProfile(nickname, replyEmail);
               } catch (error) {
                 setNameError((error as Error).message);
               } finally {
@@ -393,6 +395,25 @@ export function Settings({
               />
               <p className="field-note">留空使用“柿间邮局”，修改仅影响之后新建的信。</p>
             </div>
+            <div className="field">
+              <label htmlFor="reply-email">回信邮箱（选填）</label>
+              <input
+                id="reply-email"
+                type="email"
+                value={replyEmail}
+                maxLength={254}
+                placeholder="填写你能收信的邮箱"
+                disabled={!config.user?.active || saving}
+                aria-describedby="reply-email-note"
+                onChange={(e) => {
+                  setReplyEmail(e.target.value);
+                  setNameError('');
+                }}
+              />
+              <p id="reply-email-note" className="field-note">
+                不填写将无法收到回信；填写后，收件人点击“回复”会寄到这个邮箱。回信在你的邮箱查看，地址会向收件人展示。修改仅影响之后新建的信。
+              </p>
+            </div>
             <div className="sender-preview">
               <span>收件人看到</span>
               <strong>{senderDisplay(senderFrom(config.from, nickname.trim()))}</strong>
@@ -403,10 +424,11 @@ export function Settings({
               disabled={
                 !config.user?.active ||
                 saving ||
-                nickname.trim() === (config.user?.senderName || '')
+                (nickname.trim() === (config.user?.senderName || '') &&
+                  replyEmail.trim() === (config.user?.replyEmail || ''))
               }
             >
-              {saving ? '保存中…' : '保存昵称'}
+              {saving ? '保存中…' : '保存寄件设置'}
             </button>
             {nameError && (
               <p role="alert" className="image-error">

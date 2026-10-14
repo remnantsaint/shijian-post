@@ -1128,3 +1128,98 @@ describe('删除指定历史记录与去重', () => {
     expect((await request('/tasks/' + input.id, 'DELETE', {}, '')).status).toBe(401);
   });
 });
+
+describe('回信邮箱', () => {
+  it('saves and clears the current user email while preserving omitted profile fields', async () => {
+    const other = await otherUser();
+    const saved = await request(
+      '/profile',
+      'POST',
+      { senderName: '小王', replyEmail: '  friend@example.com  ' },
+      other,
+    );
+    expect(saved.status).toBe(200);
+    expect(await saved.json()).toMatchObject({
+      user: { senderName: '小王', replyEmail: 'friend@example.com' },
+    });
+    expect(await (await request('/config')).json()).toMatchObject({ user: { replyEmail: '' } });
+    await request('/profile', 'POST', { senderName: '新名字' }, other);
+    expect(await (await request('/config', 'GET', undefined, other)).json()).toMatchObject({
+      user: { senderName: '新名字', replyEmail: 'friend@example.com' },
+    });
+    await request('/profile', 'POST', { replyEmail: ' ' }, other);
+    expect(await (await request('/config', 'GET', undefined, other)).json()).toMatchObject({
+      user: { senderName: '新名字', replyEmail: '' },
+    });
+  });
+  it('rejects invalid emails, header injection and unauthorized settings', async () => {
+    expect((await request('/profile', 'POST', { replyEmail: 'a@example.com' }, '')).status).toBe(
+      401,
+    );
+    expect(
+      (await request('/profile', 'POST', { replyEmail: 'a@example.com' }, await otherUser(false)))
+        .status,
+    ).toBe(403);
+    for (const replyEmail of [
+      'not-an-email',
+      'a@example.com, b@example.com',
+      'Name <a@example.com>',
+      'a@example.com\r\nBcc: b@example.com',
+      '\na@example.com',
+      'x'.repeat(255) + '@example.com',
+      null,
+      3,
+    ]) {
+      expect((await request('/profile', 'POST', { replyEmail })).status).toBe(400);
+    }
+    expect(
+      (await request('/profile', 'POST', { replyEmail: 'a@example.com', userId: 'other' })).status,
+    ).toBe(400);
+    expect((await request('/profile', 'POST', {})).status).toBe(400);
+    expect(await (await request('/config')).json()).toMatchObject({ user: { replyEmail: '' } });
+  });
+  it('snapshots reply address for scheduled mail and preserves it on replays after settings change', async () => {
+    await request('/profile', 'POST', { replyEmail: 'first@example.com' });
+    const input = payload();
+    const first = await request('/tasks', 'POST', input);
+    expect(first.status).toBe(201);
+    expect(await first.json()).toMatchObject({ task: { replyTo: 'first@example.com' } });
+    await request('/profile', 'POST', { replyEmail: 'second@example.com' });
+    expect((await request('/tasks', 'POST', input)).status).toBe(200);
+    expect((await row(input.id)).reply_to).toBe('first@example.com');
+    const newer = await create();
+    expect((await row(newer.task.id)).reply_to).toBe('second@example.com');
+    await request('/profile', 'POST', { replyEmail: '' });
+    await due(input.id);
+    let submissions = 0;
+    await dispatchTask(engineEnv(), input.id, {
+      fetcher: async (_url, init) => {
+        submissions++;
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          reply_to: 'first@example.com',
+          from: '柿间邮局 <letter@send.example.com>',
+        });
+        return Response.json({ id: 'reply-test-receipt' });
+      },
+    });
+    expect(submissions).toBe(1);
+    expect((await row(input.id)).status).toBe('accepted');
+    expect((await request('/tasks/' + input.id, 'DELETE', {})).status).toBe(200);
+    expect((await row(input.id)).reply_to).toBeNull();
+  });
+  it('omits Reply-To for tasks created without an address, even after later configuration', async () => {
+    const old = await create();
+    expect((await row(old.task.id)).reply_to).toBeNull();
+    await request('/profile', 'POST', { replyEmail: 'later@example.com' });
+    await due(old.task.id);
+    let submissions = 0;
+    await dispatchTask(engineEnv(), old.task.id, {
+      fetcher: async (_url, init) => {
+        submissions++;
+        expect(JSON.parse(String(init?.body))).not.toHaveProperty('reply_to');
+        return Response.json({ id: 'no-reply-receipt' });
+      },
+    });
+    expect(submissions).toBe(1);
+  });
+});

@@ -56,12 +56,12 @@ export async function createTask(env: Env, userId: string, input: MailInput, now
       .first()
   )
     throw new Error('SUPPRESSED');
-  const identity = await env.DB.prepare('SELECT sender_name FROM users WHERE id=?')
+  const identity = await env.DB.prepare('SELECT sender_name,reply_email FROM users WHERE id=?')
     .bind(userId)
-    .first<{ sender_name: string }>();
+    .first<{ sender_name: string; reply_email: string | null }>();
   const from = senderFrom(env.MAIL_FROM, identity?.sender_name || '');
   const insert = env.DB.prepare(
-    "INSERT OR IGNORE INTO tasks(id,user_id,recipient,subject,body,payload_hash,status,target_at,expires_at,created_at,unsubscribe_token,images_metadata,sender_from) VALUES(?,?,?,?,?,?,'queued',?,?,?,?,?,?)",
+    "INSERT OR IGNORE INTO tasks(id,user_id,recipient,subject,body,payload_hash,status,target_at,expires_at,created_at,unsubscribe_token,images_metadata,sender_from,reply_to) VALUES(?,?,?,?,?,?,'queued',?,?,?,?,?,?,?)",
   ).bind(
     input.id,
     userId,
@@ -75,6 +75,7 @@ export async function createTask(env: Env, userId: string, input: MailInput, now
     token(),
     JSON.stringify(metadata),
     from,
+    identity?.reply_email || null,
   );
   // The task and all originals are saved together, including on concurrent replays.
   const [result] = await env.DB.batch([
@@ -170,6 +171,7 @@ export async function dispatchTask(
         signal: AbortSignal.timeout(15000),
         body: JSON.stringify({
           from: task.sender_from || env.MAIL_FROM,
+          ...(task.reply_to ? { reply_to: task.reply_to } : {}),
           to: [task.recipient],
           subject: task.subject,
           text: letter.text,

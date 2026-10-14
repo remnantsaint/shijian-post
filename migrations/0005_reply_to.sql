@@ -1,0 +1,2 @@
+ALTER TABLE users ADD COLUMN reply_email TEXT;
+ALTER TABLE tasks ADD COLUMN reply_to TEXT;

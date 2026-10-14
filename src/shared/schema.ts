@@ -57,9 +57,17 @@ export const profileSchema = z
       .string()
       .trim()
       .max(30)
-      .refine((v) => !/[\x00-\x1f\x7f<>"\\]/.test(v), '昵称不能包含换行或邮件地址符号'),
+      .refine((v) => !/[\x00-\x1f\x7f<>"\\]/.test(v), '昵称不能包含换行或邮件地址符号')
+      .optional(),
+    replyEmail: z
+      .string()
+      .refine((v) => !/[\x00-\x1f\x7f]/.test(v), '回信邮箱不能包含换行或控制字符')
+      .transform((v) => v.trim())
+      .pipe(z.union([z.literal(''), z.email('请填写有效的回信邮箱').max(254)]))
+      .optional(),
   })
-  .strict();
+  .strict()
+  .refine((v) => v.senderName !== undefined || v.replyEmail !== undefined, '请填写寄件设置');
 export const invitationSchema = z
   .object({
     maxUses: z.number().int().min(1).max(1000).default(10),
@@ -94,6 +102,7 @@ export type Status =
   | 'cancelled'
   | 'expired';
 export interface User {
+  replyEmail: string;
   senderName: string;
   id: string;
   login: string;
@@ -102,6 +111,7 @@ export interface User {
   active: boolean;
 }
 export interface MailTask {
+  replyTo: string | null;
   senderFrom: string | null;
   images: ImageInfo[];
   imagesAvailable: boolean;

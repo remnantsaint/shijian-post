@@ -64,9 +64,17 @@ admin.use('*', async (c, next) => {
 });
 profile.post('/', async (c) => {
   const parsed = profileSchema.safeParse(await c.req.json());
-  if (!parsed.success) return c.json({ error: '昵称最多 30 字，不能包含换行、引号或尖括号' }, 400);
-  const updated = await c.env.DB.prepare('UPDATE users SET sender_name=? WHERE id=? RETURNING *')
-    .bind(parsed.data.senderName, c.get('user')!.id)
+  if (!parsed.success)
+    return c.json({ error: parsed.error.issues[0]?.message || '寄件设置不正确' }, 400);
+  const updated = await c.env.DB.prepare(
+    'UPDATE users SET sender_name=COALESCE(?,sender_name),reply_email=CASE WHEN ? THEN ? ELSE reply_email END WHERE id=? RETURNING *',
+  )
+    .bind(
+      parsed.data.senderName ?? null,
+      parsed.data.replyEmail !== undefined ? 1 : 0,
+      parsed.data.replyEmail || null,
+      c.get('user')!.id,
+    )
     .first<UserRow>();
   if (!updated) return c.json({ error: '账号已失效，请重新登录' }, 401);
   return c.json({
@@ -177,7 +185,7 @@ tasks.delete('/:id', async (c) => {
   const now = new Date().toISOString();
   const [updated] = await c.env.DB.batch([
     c.env.DB.prepare(
-      "UPDATE tasks SET deleted_at=?,subject='',body='',images_metadata='[]',images_cleaned_at=?,sender_from=NULL WHERE id=? AND user_id=? AND deleted_at IS NULL AND status IN ('accepted','simulated','failed','cancelled','expired')",
+      "UPDATE tasks SET deleted_at=?,subject='',body='',images_metadata='[]',images_cleaned_at=?,sender_from=NULL,reply_to=NULL WHERE id=? AND user_id=? AND deleted_at IS NULL AND status IN ('accepted','simulated','failed','cancelled','expired')",
     ).bind(now, now, id, userId),
     c.env.DB.prepare(
       'DELETE FROM task_images WHERE task_id=? AND EXISTS(SELECT 1 FROM tasks WHERE id=? AND user_id=? AND deleted_at IS NOT NULL)',

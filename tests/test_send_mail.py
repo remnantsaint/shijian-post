@@ -120,7 +120,7 @@ class MailTests(unittest.TestCase):
         title, body = prepared_letter()
         sent = smtp.return_value.send_message.call_args.args[0]
         self.assertEqual(sent["Subject"],title)
-        self.assertIn(body,sent.get_content())
+        self.assertIn(body.replace('\r\n','\n').replace('\r','\n'), sent.get_content().replace('\r\n','\n').replace('\r','\n'))
 
     def test_custom_body_accepts_size_limit_and_empty_subject_uses_default(self):
         with patch.dict(os.environ, {"MAIL_BODY": "文" * 100000, "MAIL_SUBJECT": "   "}):

@@ -1,146 +1,84 @@
-# QQ 邮件机器人
+# 柿间邮局 · Shijian Post
 
-一个 GitHub Actions 工作流、一份持久任务账本、一套发送生命周期。
+把今天的话，寄给某一天。
 
-自定义 GPT 的安全调用配置见 [GPT Actions 接入说明](docs/gpt-actions.md)。该配置复用 GitHub API，仍需在 GPT 编辑器配置认证；自动上传 GPT 新生成图片尚未打通。
+一个可以立即寄信、定时寄信的个人小邮局。前端与 API 一起部署在 Cloudflare Workers，使用 D1 保存任务，使用 Resend 投递邮件。
 
-随机来信和小龙娘日常来信会转达带 `给小澪的留言` 标签的 Issue 正文及新评论，复用统一任务账本去重。配置、失败保护和隐私边界见 [Issue 留言转达](docs/issue-relay.md)。
+在线地址：[email.remsait.com](https://email.remsait.com)
 
-普通 ChatGPT 若有 GitHub `create_file` 写入工具，可通过 [请求文件入口](mail-requests/README.md) 提交一次邮件任务，无需自定义 GPT Action。公开请求不适合隐私内容；仅允许仓库所有者，复用同一账本防重复。
-通过 Python 标准库和 QQ SMTP SSL 发送中文 UTF-8 邮件，支持随机长信、小龙娘来信、自定义内容及图片漫画。
-不需要常驻服务器或第三方 Python 依赖。
+## 功能
 
-## Secrets 与使用权限
+- GitHub 登录，管理员邀请码激活；用户只访问自己的信件和模板。
+- 自由填写单个收件人、标题与正文，信纸实时预览。
+- 立即发送、按北京时间定时发送、查看记录、取消尚未开始发送的任务。
+- 内置开场白，保存和删除个人模板。
+- 管理员生成七天一次性邀请码、暂停与恢复寄信。
+- HTML 与纯文本邮件，收件人可确认拒收后续来信。
+- 本地预览模式，完整体验流程，不发送真实邮件。
 
-在仓库 **Settings → Secrets and variables → Actions** 配置：
+当前为邀请使用的小项目，没有应用内额度管理、附件、循环任务或投递状态 webhook。
 
-| Secret | 内容 |
-| --- | --- |
-| `QQ_EMAIL` | 启用 SMTP 的完整 QQ/Foxmail 邮箱地址 |
-| `QQ_SMTP_AUTH_CODE` | 对应邮箱的 SMTP 授权码，不是登录密码 |
-| `MAIL_TO` | 单个完整收件邮箱地址 |
+## 技术与结构
 
-不要把凭据放入代码、聊天或触发参数。工作流只向发送步骤传递邮箱 Secrets。
-公开仓库的手动操作和定时执行仅允许仓库所有者；漫画任务始终要求所有者身份。
-私有仓库的有权协作者仍能操作普通任务。每个人使用自己的私有仓库才能隔离个人记录，不能共享作者的 Secrets。
+TypeScript · React · Vite · Hono · Cloudflare Workers / D1 · Resend · Zod
 
-公开仓库的任务编号、时间、状态与哈希可以被读取，但自定义正文、延期发送的图片快照存放在认证可见的草稿 Release，
-不会提交到 Git 或写入公开摘要。触发参数本身不是 Secrets，不能承载凭据或高敏感信息。
-旧日志、旧摘要与公开图片不会因本次重构自动隐藏；有权协作者和 GitHub 服务仍可访问草稿内容。
-
-## 唯一入口
-
-打开 **Actions → 邮件机器人（统一入口） → Run workflow**。
-`action` 默认是 **查看状态**，不发送、不修改任务。
-
-| 操作 | 内容 |
-| --- | --- |
-| 发送测试邮件 | 测试内容，也通过任务账本占用并记录结果 |
-| 发送随机来信 | 从现有素材选择未使用的文案 |
-| 发送小龙娘来信 | 保留小龙娘显示名称与长信风格 |
-| 发送自定义邮件 | 使用标题、正文和可选图片 |
-| 发送漫画邮件 | 使用上传请求编号，或 `draft:图片文件名` |
-| 安排一次 | 创建随机目标时间的单次长信任务 |
-| 循环随机发送 | 创建带随机重复规则的长信任务 |
-| 指定时间发送 | 自定义邮件，需要填写目标时间 |
-| 周期发送 | 自定义邮件，需要填写重复规则 |
-| 关闭计划 | 关闭重复任务；不关闭单次任务或整个工作流 |
-| 取消任务 | 填 `task_id`，取消指定任务 |
-| 运行代码检查 | 只读离线测试，无邮箱 Secrets |
-
-所有发送操作均使用以下相同的时间字段，不再有独立随机调度器或运行器内倒计时：
-
-| 字段 | 例子 | 含义 |
-| --- | --- | --- |
-| `timing` | 留空或 `now` | 内容保存完成后尽快发送 |
-| `timing` | `after:2m` | 从任务创建时起两分钟后的目标时间 |
-| `timing` | `2026-10-25T20:00:00+08:00` | 指定带时区的时间；示例需替换为希望的日期 |
-| `timing` | `random:5m:2d` | 在 5 分钟到 2 天中随机生成目标时间一次 |
-| `repeat_rule` | 留空 | 单次任务 |
-| `repeat_rule` | `every:2h` | 固定周期；错过多个周期时不会集中补发 |
-| `repeat_rule` | `random:5m:30d` | 成功后生成下一随机目标时间 |
-| `expires_at` | 带时区的时间 | 可选截止时间，超过后不发送 |
-
-间隔支持 `s/m/h/d`，每个间隔不超过 90 天。随机范围和固定周期都只生成时间，生命周期完全相同。
-“安排一次/循环随机发送”留空目标时间时使用 `random:1m:90d`；循环未填重复规则时使用目标随机范围，
-若首目标不是随机时间，则默认后续 `random:1m:90d`。
-自定义正文必填，标题可留空；其他发送方式由现有内容模板生成。
-
-**GitHub Actions 不保证精确到秒。** 默认约每小时检查；变量 `MAIL_BOT_POLL_MINUTES=5` 切换为约每 5 分钟。
-GitHub 排队、平台跳过调度或长时间无活动停用都会造成延迟。`after:2m` 是目标时间，不保证两分钟收到。
-没有截止时间时，迟到任务只补发一次；填写截止时间时，超期任务标记 `expired`，不自动补发。
-周期任务跳过错过的时段，下一目标保持周期锚点，不连续发送积压邮件。
-
-## 一套任务状态和防重复
-
-`.mail-bot/tasks.json` 保存每个任务的内容描述/私有内容引用、目标时间、可选重复规则、截止时间、状态和结果历史。
-自定义文字和延期图片为不可变草稿附件引用；随机文字保留现有生成与文案去重策略，逐次选择未用文案。
-
-`staging → queued → sending → accepted / failed / uncertain / expired`。
-重复任务仅在 SMTP 已接受且结果持久化后返回 `queued`，增加轮次并生成下一目标时间。
-`cancelled` 和 `blocked` 不执行。每个任务保留最多 20 条最近结果，迁移源历史另外完整保存。
-
-- 持久 CAS 占用必须先成功，才能调用 SMTP。任务编号加轮次阻止并发重复发送。
-- 同一个 GitHub 运行的重跑不创建新任务；立即发送也不绕过占用。漫画附件 ID 对应稳定请求编号。
-- 仅明确的状态 SHA 冲突重读有限次数；上传、工作流触发、SMTP 或不确定写入不自动重试。
-- 认证等明确失败记为 `failed`；提交期间断线、中断或结果未确认记为 `uncertain`，不会自动续发或重发。
-- 中断恢复先查询旧运行，仍在执行或状态未知时不抢占；确认结束后只记不确定，不重新发送。
-- 取消正在处理的任务不能撤回邮件；会保留不确定状态并保护仍在使用的附件。
-- 清理是独立步骤，不改变发送结果；重复任务保留内容与图片直到结束/取消。
-- 草稿存储写入未确认、无内容的旧请求会阻止发送，需要人工核验，不能强行清空任务编号。
-
-SMTP 接受不是最终投递或已读。状态页以任务结果为依据，工作流绿色不等于发过邮件。
-目标时间、SMTP 接受时间、结果记录时间分别显示；内部 UTC，页面和写信时间为北京时间 UTC+8。
-运行器使用实际系统时间，登录后更新邮件 Date，并在提交邮件前再次检查截止时间。
-截止时间检查也不能保证最终投递时间。
-
-## 图片和漫画
-
-普通邮件 `image_path` 可填仓库内 `images/photo.png`，文件不超过 5 MiB，支持 PNG/JPEG/GIF/WebP。
-创建任务时验证并私有保存快照，以免延迟期间文件变动改变附件；公开仓库原图片仍然公开。
-漫画入口支持 PNG/JPEG/静态 WebP，并额外检查结构、尺寸和 SHA-256。
-
-手机路径：先上传并保存 GitHub 草稿附件，再选择 **发送漫画邮件**，`image_path` 填 `draft:完整文件名`，
-填写正文，上传请求编号留空。可以同时填写 `timing` 和 `repeat_rule`，同样进入统一任务。
-自动工具仍可使用 `scripts.comic_mail upload/register`，它们只管理上传及触发，不再维护独立发送状态机。
-见 [漫画上传、手机操作和工具授权](docs/comic-mail.md)。
-
-不要发布 `mail-bot-temporary-images-v1` 草稿 Release。发送/取消后的临时文件由独立清理步骤删除；
-失败上传或不确定准备可能留下草稿文件，可按编号人工清理，但不能删掉请求/任务去重记录。
-
-## 助手与命令行
-
-使用运行环境已有的 `GH_TOKEN`/`GITHUB_TOKEN`，不要把令牌放入参数或聊天。
-本地明确指定 `--repo`；Actions 内默认当前仓库。以仓库根目录为工作目录。
-
-```sh
-python -m scripts.control_bot --repo xurenqi/mail-bot status
-python -m scripts.control_bot --repo xurenqi/mail-bot send --type random
-python -m scripts.control_bot --repo xurenqi/mail-bot schedule --type random --at after:10m
-python -m scripts.control_bot --repo xurenqi/mail-bot schedule --type custom --at '2026-10-25T20:00:00+08:00' --body '你好'
-python -m scripts.control_bot --repo xurenqi/mail-bot schedule --type random --at now --repeat every:2h
-python -m scripts.control_bot --repo xurenqi/mail-bot plan --mode repeat --min 5 --min-unit minutes --max 30 --max-unit days
-python -m scripts.control_bot --repo xurenqi/mail-bot pause
-python -m scripts.control_bot --repo xurenqi/mail-bot cancel-task --task-id 任务UUID
+```text
+src/web/       页面、样式、API 客户端
+src/worker/    登录、会话、API、发送和定时调度
+src/shared/    前后端共享的数据类型和请求校验
+migrations/    数据库结构迁移
+scripts/       本地初始化
+public/        静态图标与响应头
+tests/        API、D1、发送行为测试
+e2e/          桌面和手机浏览器验收
+docs/         完整搭建与部署指南
 ```
 
-`send`、`plan` 是兼容的任务创建入口，不是独立调度器。旧 `--delay random_3min` 只转成 1–180 秒后的目标时间，
-不再 sleep，实际仍受 cron 延迟影响。`cancel-run` 仍可取消指定邮件运行，但不能撤回已提交的邮件。
-工作流停用且仍有未完成任务时，不会因创建新计划自动恢复旧任务。
+仓库和 npm 包名为 shijian-post。线上 Worker 与数据库沿用 manyou-mail，改仓库名不会创建新的线上资源。
 
-ChatGPT Tasks 必须有自己的图片、文件、终端工具与 GitHub 授权；这里不能创建 Tasks 或授予未来任务工具，
-不能承诺只说“两分钟后给我发漫画”即可全自动完成。GitHub 自身的任务检查不需要聊天一直在线。
+## 本地开发
 
-## 迁移与验证
+安装 Git 和 Node.js 22.12 或以上。克隆后进入项目目录：
 
-本仓库旧随机计划与旧图片请求已迁到统一账本；旧源文件没有删除或覆盖，不再驱动执行。
-已关闭的计划仍关闭；旧 `sending/claimed` 转不确定，禁止重发；旧成功/失败和历史保留。
-旧图片请求只有内容哈希时不会猜正文，保持 `blocked`；原授权触发内容匹配且从未占用的请求才可补齐内容。
-迁移幂等，重复执行不会覆盖已迁入任务。可用 `scripts.task_runner preview-migration/migrate` 检查其他旧副本。
-原 `.github/workflows` 归档仍在 `docs/legacy-workflows/`；旧运行记录依 GitHub 保留期限可查看。
+```sh
+git clone https://github.com/remnantsaint/shijian-post.git
+cd shijian-post
+npm ci
+npm run setup
+npm run dev
+```
 
-`random_scheduler.py` 和运行器倒计时已移除，`legacy_plan.py` 只读解码旧格式。
-工作流只保留只读代码检查及统一任务作业；提交代码不发送邮件。
-本地运行 `python -m unittest discover -s tests -v`，测试模拟 GitHub/SMTP，不发送真实邮件。
-覆盖时区、延迟、重复规则、迁移、并发占用、取消、过期、失败、清理、UTF-8 与真实格式图片 MIME 字节。
-无需新增 QQ Secrets。
+打开终端显示的地址，点击“登录邮局”→“预览邮局 · 不发送邮件”。setup 会生成被 Git 忽略的 .dev.vars，并初始化本地 D1。开发环境不需要真实 GitHub / Resend 密钥，本地数据与线上数据独立。
+
+## 验证与发布
+
+```sh
+npm run typecheck
+npm test
+npm run test:e2e
+npm run build
+```
+
+浏览器验收在 Windows 使用系统 Edge；其他系统可先运行 npx playwright install chromium。自动化测试只使用模拟发送。
+
+第一次上线请按 [完整搭建与部署指南](docs/SETUP.md) 配置 D1、GitHub OAuth App、Resend DNS 和 Worker Secrets。已授权电脑可通过 npm run deploy 更新原 Worker，也可以连接 GitHub 自动部署。
+
+换电脑后只需重新安装依赖、运行 setup；线上账号、DNS、数据库与 Secrets 不需要重建。具体步骤见 [换电脑与日常开发](docs/SETUP.md#换电脑与日常开发)。
+
+## 发送行为
+
+- 定时任务每分钟检查一次，使用北京时间输入，可能有平台调度延迟。
+- 相同任务编号不会重复执行；D1 原子领取和 Resend 幂等键降低重复发送风险。
+- “服务已接受”代表 Resend 接受了请求，不能证明已进入收件箱。
+- 网络中断或结果不确定时不会自动重发；先核对记录和实际收件情况。
+- 只有等待寄出的任务可以取消，已经提交的邮件无法撤回。
+- 记录页显示最近一百封，历史任务继续保存作为去重依据。
+- 退订页面打开时只显示确认，确认后屏蔽该收件地址并取消待寄信件。
+
+## 配置与费用
+
+实际 API Key、Client Secret、会话凭证和用户数据不提交到 GitHub。线上密钥保存在 Cloudflare Secrets；数据库 ID、域名和 GitHub 用户名属于公开配置。仓库保留站点维护者的线上资源配置，其他使用者需换成自己的资源。
+
+项目可在免费套餐额度内运行，但各服务仍有请求、数据库和发信限制；额度以 [Cloudflare](https://developers.cloudflare.com/workers/platform/pricing/) 和 [Resend](https://resend.com/pricing) 当前规则为准，域名续费另计。
+
+本项目从旧 Python 邮件工具重建，保留原 Git 历史。旧代码不参与当前运行；如果旧仓库仍启用了定时发信工作流，需要在旧仓库单独停用。

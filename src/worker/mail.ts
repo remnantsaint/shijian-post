@@ -1,0 +1,185 @@
+import type { MailInput } from '../shared/schema';
+import { digest, token } from './security';
+import { renderLetter } from './mail-template';
+import type { Env, TaskRow } from './types';
+
+export function mailMode(env: Env): 'mock' | 'resend' | 'disabled' {
+  if (env.MAIL_MODE === 'mock' && ['development', 'test'].includes(env.ENVIRONMENT)) return 'mock';
+  if (
+    env.MAIL_MODE === 'resend' &&
+    env.RESEND_API_KEY &&
+    env.MAIL_FROM &&
+    !/[\r\n]/.test(env.MAIL_FROM)
+  )
+    return 'resend';
+  return 'disabled';
+}
+export async function paused(env: Env) {
+  return Boolean(
+    (await env.DB.prepare('SELECT paused FROM settings WHERE id=1').first<{ paused: number }>())
+      ?.paused,
+  );
+}
+export async function createTask(env: Env, userId: string, input: MailInput, now = new Date()) {
+  const hash = await digest(
+    JSON.stringify({
+      recipient: input.recipient,
+      subject: input.subject,
+      body: input.body,
+      sendAt: input.sendAt || null,
+      expiresAt: input.expiresAt || null,
+    }),
+  );
+  const old = await env.DB.prepare('SELECT * FROM tasks WHERE id=?')
+    .bind(input.id)
+    .first<TaskRow>();
+  if (old) {
+    if (old.user_id !== userId || old.payload_hash !== hash) throw new Error('ID_CONFLICT');
+    return { task: old, created: false };
+  }
+  const target = input.sendAt ? new Date(input.sendAt) : now;
+  if (
+    input.sendAt &&
+    (target.getTime() < now.getTime() - 30000 || target.getTime() > now.getTime() + 731 * 86400000)
+  )
+    throw new Error('INVALID_TIME');
+  if (input.expiresAt && new Date(input.expiresAt) < target) throw new Error('INVALID_TIME');
+  if (
+    await env.DB.prepare('SELECT recipient FROM suppressions WHERE recipient=?')
+      .bind(input.recipient)
+      .first()
+  )
+    throw new Error('SUPPRESSED');
+  const result = await env.DB.prepare(
+    "INSERT OR IGNORE INTO tasks(id,user_id,recipient,subject,body,payload_hash,status,target_at,expires_at,created_at,unsubscribe_token) VALUES(?,?,?,?,?,?,'queued',?,?,?,?)",
+  )
+    .bind(
+      input.id,
+      userId,
+      input.recipient,
+      input.subject,
+      input.body,
+      hash,
+      target.toISOString(),
+      input.expiresAt ? new Date(input.expiresAt).toISOString() : null,
+      now.toISOString(),
+      token(),
+    )
+    .run();
+  const task = await env.DB.prepare('SELECT * FROM tasks WHERE id=?')
+    .bind(input.id)
+    .first<TaskRow>();
+  if (!task || task.user_id !== userId || task.payload_hash !== hash)
+    throw new Error('ID_CONFLICT');
+  return { task, created: result.meta.changes === 1 };
+}
+
+export async function dispatchTask(
+  env: Env,
+  id: string,
+  options: { now?: Date; fetcher?: typeof fetch } = {},
+) {
+  const now = (options.now || new Date()).toISOString();
+  if (await paused(env)) return;
+  await env.DB.prepare(
+    "UPDATE tasks SET status='expired',finished_at=?,reason='超过最晚发送时间' WHERE id=? AND status='queued' AND expires_at IS NOT NULL AND expires_at<?",
+  )
+    .bind(now, id, now)
+    .run();
+  const task = await env.DB.prepare(
+    "UPDATE tasks SET status='sending',claimed_at=? WHERE id=? AND status='queued' AND target_at<=? RETURNING *",
+  )
+    .bind(now, id, now)
+    .first<TaskRow>();
+  if (!task) return;
+  let status: 'accepted' | 'simulated' | 'failed' | 'uncertain' = 'failed';
+  let reason: string | null = null;
+  let providerId: string | null = null;
+  // All definite preflight failures happen before handing any content to Resend.
+  if (
+    await env.DB.prepare('SELECT recipient FROM suppressions WHERE recipient=?')
+      .bind(task.recipient)
+      .first()
+  )
+    reason = '收件人已拒收后续来信';
+  else if (await paused(env)) {
+    await env.DB.prepare(
+      "UPDATE tasks SET status='queued',claimed_at=NULL WHERE id=? AND status='sending'",
+    )
+      .bind(id)
+      .run();
+    return;
+  } else if (mailMode(env) === 'disabled') reason = '邮件服务尚未配置或已关闭';
+  else if (mailMode(env) === 'mock') {
+    status = 'simulated';
+    reason = '本地模拟，未向真实邮箱投递';
+  } else {
+    const unsubscribe = new URL('/unsubscribe/' + task.unsubscribe_token, env.APP_URL).href;
+    const letter = renderLetter(task.subject, task.body, unsubscribe);
+    try {
+      const response = await (options.fetcher || fetch)('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer ' + env.RESEND_API_KEY,
+          'Content-Type': 'application/json',
+          'Idempotency-Key': 'manyou/' + task.id,
+        },
+        signal: AbortSignal.timeout(15000),
+        body: JSON.stringify({
+          from: env.MAIL_FROM,
+          to: [task.recipient],
+          subject: task.subject,
+          text: letter.text,
+          html: letter.html,
+        }),
+      });
+      if (response.ok) {
+        const receipt = (await response.json()) as { id?: unknown };
+        if (typeof receipt.id !== 'string' || !receipt.id || receipt.id.length > 200)
+          throw new Error('RECEIPT_MISSING');
+        status = 'accepted';
+        providerId = receipt.id;
+      } else if (response.status >= 400 && response.status < 500 && response.status !== 408) {
+        status = 'failed';
+        reason = '邮件服务拒绝本次请求（HTTP ' + response.status + '），未自动重发';
+      } else {
+        status = 'uncertain';
+        reason = '邮件服务结果未获确认，请核对收件箱与服务记录；不会自动重发';
+      }
+    } catch {
+      status = 'uncertain';
+      reason = '提交期间连接中断或超时，结果待核实；不会自动重发';
+    }
+  }
+  // A persistence failure leaves the claim in place, never queues another submission.
+  await env.DB.prepare(
+    "UPDATE tasks SET status=?,finished_at=?,provider_id=?,reason=? WHERE id=? AND status='sending'",
+  )
+    .bind(status, new Date().toISOString(), providerId, reason, id)
+    .run();
+}
+export async function runDueTasks(env: Env, options: { now?: Date; fetcher?: typeof fetch } = {}) {
+  const now = options.now || new Date();
+  await env.DB.prepare(
+    "UPDATE tasks SET status='uncertain',finished_at=?,reason='执行中断，发送结果待核实；不会自动重发' WHERE status='sending' AND claimed_at<?",
+  )
+    .bind(now.toISOString(), new Date(now.getTime() - 15 * 60000).toISOString())
+    .run();
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM sessions WHERE expires_at<?').bind(now.toISOString()),
+    env.DB.prepare('DELETE FROM oauth_states WHERE expires_at<?').bind(now.toISOString()),
+  ]);
+  if (await paused(env)) return;
+  const due = await env.DB.prepare(
+    "SELECT id FROM tasks WHERE status='queued' AND target_at<=? ORDER BY target_at LIMIT 10",
+  )
+    .bind(now.toISOString())
+    .all<{ id: string }>();
+  for (const task of due.results) {
+    try {
+      await dispatchTask(env, task.id, options);
+    } catch {
+      console.error('Task execution or result persistence failed; claim retained.');
+    }
+  }
+}

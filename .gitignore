@@ -1,4 +1,12 @@
-__pycache__/
-*.py[cod]
+node_modules/
+dist/
+.wrangler/
+.dev.vars
 .env
 .env.*
+!.env.example
+*.log
+coverage/
+node_cache/
+test-results/
+playwright-report/

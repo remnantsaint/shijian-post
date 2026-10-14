@@ -1,0 +1,5 @@
+# Copy this file to .dev.vars for local-only mock delivery. Never commit real secrets.
+ENVIRONMENT="development"
+MAIL_MODE="mock"
+APP_URL="http://127.0.0.1:5173"
+# Production needs GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET and RESEND_API_KEY via wrangler secret put.

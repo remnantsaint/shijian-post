@@ -12,7 +12,8 @@ from .state_store import STATE_BRANCH, StateBranch
 from .time_utils import format_utc, parse_utc, utc_now
 
 PATH = '.mail-bot/tasks.json'
-MAX_SECONDS = 90 * 86400
+MAX_SECONDS = 90 * 86400  # Recurring intervals remain limited to 90 days.
+MAX_ONE_SHOT_SECONDS = 731 * 86400  # Supports one-time scheduling up to ~24 months.
 STATES = {'staging', 'blocked', 'queued', 'sending', 'accepted', 'failed',
           'uncertain', 'cancelled', 'expired'}
 TERMINAL = {'accepted', 'failed', 'uncertain', 'cancelled', 'expired'}
@@ -31,13 +32,13 @@ def task_id(value):
     return value
 
 
-def duration(value):
+def duration(value, *, limit=MAX_SECONDS):
     match = re.fullmatch(r'([1-9][0-9]{0,8})(s|m|h|d)', value or '')
     if not match:
         raise TaskError('间隔格式为正整数加 s/m/h/d，例如 5m、2h、30d。')
     seconds = int(match[1]) * {'s':1, 'm':60, 'h':3600, 'd':86400}[match[2]]
-    if seconds > MAX_SECONDS:
-        raise TaskError('间隔不能超过 90 天。')
+    if seconds > limit:
+        raise TaskError('间隔超过允许范围。')
     return seconds
 
 
@@ -60,8 +61,15 @@ def target_time(value, *, now=None, choose=None):
     if not value or value == 'now':
         return format_utc(now)
     if value.startswith('after:'):
-        return format_utc(now+timedelta(seconds=duration(value[6:])))
-    rule = repeat_rule(value) if value.startswith('random:') else None
+        return format_utc(now+timedelta(seconds=duration(value[6:], limit=MAX_ONE_SHOT_SECONDS)))
+    rule = None
+    if value.startswith('random:'):
+        parts = value.split(':')
+        if len(parts) != 3: raise TaskError('随机时间格式为 random:5m:730d。')
+        low = duration(parts[1], limit=MAX_ONE_SHOT_SECONDS)
+        high = duration(parts[2], limit=MAX_ONE_SHOT_SECONDS)
+        if low > high: raise TaskError('随机时间最短值不能大于最长值。')
+        rule = {'min_seconds':low,'max_seconds':high}
     if rule:
         seconds = (choose or random.SystemRandom().randint)(rule['min_seconds'], rule['max_seconds'])
         return format_utc(now + timedelta(seconds=seconds))
